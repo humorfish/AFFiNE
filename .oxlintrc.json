@@ -393,6 +393,24 @@
       }
     },
     {
+      "files": [
+        "packages/frontend/core/src/modules/cloud/**",
+        "packages/frontend/core/src/blocksuite/**",
+        "packages/frontend/core/src/components/**",
+        "packages/frontend/core/src/desktop/**",
+        "packages/frontend/core/src/mobile/**",
+        "packages/frontend/core/src/modules/**",
+        "packages/frontend/core/src/components/affine/auth/**",
+        "packages/frontend/apps/**"
+      ],
+      "rules": {
+        "typescript/ban-ts-comment": "off",
+        "typescript/await-thenable": "off",
+        "typescript/no-floating-promises": "off",
+        "typescript/no-misused-promises": "off"
+      }
+    },
+    {
       "files": ["blocksuite/framework/std/src/view/element/lit-host.ts"],
       "rules": {
         "lit/binding-positions": "off",

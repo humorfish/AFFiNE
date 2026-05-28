@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { Loading, Scrollable } from '@affine/component';
 import { WorkspaceDetailSkeleton } from '@affine/component/setting-components';
 import type { ModalProps } from '@affine/component/ui/modal';

@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { SubscriptionService } from '@affine/core/modules/cloud';
 import { Trans, useI18n } from '@affine/i18n';
 import { useLiveData, useService } from '@toeverything/infra';

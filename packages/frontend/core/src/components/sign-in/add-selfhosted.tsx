@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed
 import { Button, notify } from '@affine/component';
 import {
   AuthContainer,

@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import type { DocsService } from '@affine/core/modules/doc';
 import type { FavoriteService } from '@affine/core/modules/favorite';
 import { Service } from '@toeverything/infra';

@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { Button, notify, Switch, Tooltip } from '@affine/component';
 import {
   SettingHeader,

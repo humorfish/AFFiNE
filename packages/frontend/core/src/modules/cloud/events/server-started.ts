@@ -1,3 +1,2 @@
-import { createEvent } from '@toeverything/infra';
-
-export const ServerStarted = createEvent('ServerStarted');
+// TODO(story): cloud module stub
+export class ServerStarted {}

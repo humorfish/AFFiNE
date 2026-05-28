@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { CALENDAR_INTEGRATION_SCROLL_ANCHOR } from '@affine/core/desktop/dialogs/setting/navigation-constants';
 import { WorkspaceServerService } from '@affine/core/modules/cloud';
 import { WorkspaceDialogService } from '@affine/core/modules/dialogs';

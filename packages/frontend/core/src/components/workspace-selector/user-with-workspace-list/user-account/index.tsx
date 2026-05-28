@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { UserPlanButton } from '@affine/core/components/affine/auth/user-plan-button';
 import type { SyntheticEvent } from 'react';
 

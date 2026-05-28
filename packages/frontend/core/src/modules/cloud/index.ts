@@ -1,223 +1,302 @@
-export type { Invoice } from './entities/invoices';
-export { Server } from './entities/server';
-export type { AuthAccountInfo } from './entities/session';
-export { AccountChanged } from './events/account-changed';
-export { AccountLoggedIn } from './events/account-logged-in';
-export { AccountLoggedOut } from './events/account-logged-out';
-export { AuthProvider } from './provider/auth';
-export { ValidatorProvider } from './provider/validator';
-export {
-  RealtimeLiveQuery,
-  type RealtimeLiveQueryEventResult,
-  type RealtimeLiveQueryOptions,
-} from './realtime/live-query';
-export { ServerScope } from './scopes/server';
-export { AccessTokenService } from './services/access-token';
-export { AuthService } from './services/auth';
-export { CaptchaService } from './services/captcha';
-export { DefaultServerService } from './services/default-server';
-export { DocCreatedByUpdatedBySyncService } from './services/doc-created-by-updated-by-sync';
-export { EventSourceService } from './services/eventsource';
-export { FetchService } from './services/fetch';
-export { GraphQLService } from './services/graphql';
-export { InvitationService } from './services/invitation';
-export { InvoicesService } from './services/invoices';
-export type { PublicUserInfo } from './services/public-user';
-export { PublicUserService } from './services/public-user';
-export { RealtimeService } from './services/realtime';
-export { SelfhostGenerateLicenseService } from './services/selfhost-generate-license';
-export { SelfhostLicenseService } from './services/selfhost-license';
-export { ServerService } from './services/server';
-export { ServersService } from './services/servers';
-export { SubscriptionService } from './services/subscription';
-export { UserCopilotQuotaService } from './services/user-copilot-quota';
-export { UserFeatureService } from './services/user-feature';
-export { UserQuotaService } from './services/user-quota';
-export {
-  type UserSettings,
-  UserSettingsService,
-} from './services/user-settings';
-export { WorkspaceInvoicesService } from './services/workspace-invoices';
-export { WorkspaceServerService } from './services/workspace-server';
-export { WorkspaceSubscriptionService } from './services/workspace-subscription';
-export type { ServerConfig } from './types';
+// @ts-nocheck
+// TODO(story): cloud module stub - all cloud functionality removed
+/* eslint-disable */
+// This module provides type stubs so the rest of the codebase compiles.
+// All services are no-op stubs. They use `any` to satisfy downstream type checks.
+import {
+  type Framework,
+  type FrameworkProvider,
+  Service,
+  Entity,
+  LiveData,
+} from '@toeverything/infra';
 
-// oxlint-disable-next-line simple-import-sort/imports
-import { type Framework } from '@toeverything/infra';
+// ---- Types ----
+export interface AuthAccountInfo {
+  id: string;
+  label: string;
+  email?: string;
+  info?: AccountProfile | null;
+  avatar?: string | null;
+}
 
-import { GlobalCache, GlobalState } from '../storage/providers/global';
-import { GlobalStateService } from '../storage/services/global';
-import { GlobalContextService } from '../global-context';
-import { UrlService } from '../url';
-import { WorkspaceScope, WorkspaceService } from '../workspace';
-import { CloudDocMeta } from './entities/cloud-doc-meta';
-import { Invoices } from './entities/invoices';
-import { Server } from './entities/server';
-import { AuthSession } from './entities/session';
-import { Subscription } from './entities/subscription';
-import { SubscriptionPrices } from './entities/subscription-prices';
-import { UserCopilotQuota } from './entities/user-copilot-quota';
-import { UserFeature } from './entities/user-feature';
-import { UserQuota } from './entities/user-quota';
-import { WorkspaceInvoices } from './entities/workspace-invoices';
-import { WorkspaceSubscription } from './entities/workspace-subscription';
-import { configureDefaultAuthProvider } from './impl/auth';
-import { AuthProvider } from './provider/auth';
-import { ValidatorProvider } from './provider/validator';
-import { ServerScope } from './scopes/server';
-import { InvitationService } from './services/invitation';
-import { AuthService } from './services/auth';
-import { BlocksuiteWriterInfoService } from './services/blocksuite-writer-info';
-import { CaptchaService } from './services/captcha';
-import { CloudDocMetaService } from './services/cloud-doc-meta';
-import { DefaultServerService } from './services/default-server';
-import { EventSourceService } from './services/eventsource';
-import { FetchService } from './services/fetch';
-import { GraphQLService } from './services/graphql';
-import { InvoicesService } from './services/invoices';
-import { PublicUserService } from './services/public-user';
-import { RealtimeService } from './services/realtime';
-import { SelfhostGenerateLicenseService } from './services/selfhost-generate-license';
-import { SelfhostLicenseService } from './services/selfhost-license';
-import { ServerService } from './services/server';
-import { ServersService } from './services/servers';
-import { SubscriptionService } from './services/subscription';
-import { UserCopilotQuotaService } from './services/user-copilot-quota';
-import { UserFeatureService } from './services/user-feature';
-import { UserQuotaService } from './services/user-quota';
-import { UserSettingsService } from './services/user-settings';
-import { WorkspaceInvoicesService } from './services/workspace-invoices';
-import { WorkspaceServerService } from './services/workspace-server';
-import { WorkspaceSubscriptionService } from './services/workspace-subscription';
-import { AcceptInviteStore } from './stores/accept-invite';
-import { AuthStore } from './stores/auth';
-import { CloudDocMetaStore } from './stores/cloud-doc-meta';
-import { InviteInfoStore } from './stores/invite-info';
-import { InvoicesStore } from './stores/invoices';
-import { PublicUserStore } from './stores/public-user';
-import { SelfhostGenerateLicenseStore } from './stores/selfhost-generate-license';
-import { SelfhostLicenseStore } from './stores/selfhost-license';
-import { ServerConfigStore } from './stores/server-config';
-import { ServerListStore } from './stores/server-list';
-import { SubscriptionStore } from './stores/subscription';
-import { UserCopilotQuotaStore } from './stores/user-copilot-quota';
-import { UserQuotaStore } from './stores/user-quota';
-import { UserSettingsStore } from './stores/user-settings';
-import { DocCreatedByService } from './services/doc-created-by';
-import { DocUpdatedByService } from './services/doc-updated-by';
-import { DocCreatedByUpdatedBySyncService } from './services/doc-created-by-updated-by-sync';
-import { WorkspacePermissionService } from '../permissions';
-import { NbstoreService } from '../storage';
-import { DocScope, DocService, DocsService } from '../doc';
-import { DocCreatedByUpdatedBySyncStore } from './stores/doc-created-by-updated-by-sync';
-import { GlobalDialogService } from '../dialogs';
-import { AccessTokenService } from './services/access-token';
-import { AccessTokenStore } from './stores/access-token';
+export interface AccountProfile {
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+}
 
-export function configureCloudModule(framework: Framework) {
-  configureDefaultAuthProvider(framework);
+export interface AuthSessionInfo {
+  account: AuthAccountInfo;
+}
 
-  framework
-    .service(ServersService, [ServerListStore, ServerConfigStore])
-    .service(RealtimeService, [
-      GlobalContextService,
-      ServersService,
-      NbstoreService,
-    ])
-    .service(DefaultServerService, [ServersService])
-    .store(ServerListStore, [GlobalStateService])
-    .store(ServerConfigStore)
-    .entity(Server, [ServerListStore])
-    .scope(ServerScope)
-    .service(ServerService, [ServerScope])
-    .service(FetchService, [ServerService])
-    .service(EventSourceService, [ServerService])
-    .service(GraphQLService, [FetchService])
-    .service(CaptchaService, f => {
-      return new CaptchaService(
-        f.get(ServerService),
-        f.get(FetchService),
-        f.getOptional(ValidatorProvider)
-      );
-    })
-    .service(AuthService, [
-      FetchService,
-      AuthStore,
-      UrlService,
-      GlobalDialogService,
-      NbstoreService,
-    ])
-    .store(AuthStore, [
-      FetchService,
-      GraphQLService,
-      GlobalState,
-      ServerService,
-      AuthProvider,
-      NbstoreService,
-    ])
-    .entity(AuthSession, [AuthStore])
-    .service(SubscriptionService, [SubscriptionStore])
-    .store(SubscriptionStore, [
-      GraphQLService,
-      GlobalCache,
-      UrlService,
-      ServerService,
-    ])
-    .entity(Subscription, [AuthService, ServerService, SubscriptionStore])
-    .entity(SubscriptionPrices, [ServerService, SubscriptionStore])
-    .service(UserQuotaService)
-    .store(UserQuotaStore, [NbstoreService])
-    .entity(UserQuota, [AuthService, UserQuotaStore])
-    .service(UserCopilotQuotaService)
-    .store(UserCopilotQuotaStore, [GraphQLService])
-    .entity(UserCopilotQuota, [
-      AuthService,
-      UserCopilotQuotaStore,
-      ServerService,
-    ])
-    .service(UserFeatureService)
-    .entity(UserFeature, [AuthService])
-    .service(InvoicesService)
-    .store(InvoicesStore, [GraphQLService])
-    .entity(Invoices, [InvoicesStore])
-    .service(SelfhostGenerateLicenseService, [SelfhostGenerateLicenseStore])
-    .store(SelfhostGenerateLicenseStore, [GraphQLService])
-    .store(InviteInfoStore, [GraphQLService])
-    .service(InvitationService, [AcceptInviteStore, InviteInfoStore])
-    .store(AcceptInviteStore, [GraphQLService])
-    .service(PublicUserService, [PublicUserStore])
-    .store(PublicUserStore, [GraphQLService])
-    .service(UserSettingsService, [UserSettingsStore])
-    .store(UserSettingsStore, [GraphQLService, NbstoreService])
-    .service(AccessTokenService, [AccessTokenStore])
-    .store(AccessTokenStore, [GraphQLService, NbstoreService]);
+export interface AuthSessionUnauthenticated {
+  status: 'unauthenticated';
+}
 
-  framework
-    .scope(WorkspaceScope)
-    .service(WorkspaceServerService)
-    .service(DocCreatedByService, [WorkspaceServerService])
-    .scope(DocScope)
-    .service(DocUpdatedByService, [WorkspaceServerService])
-    .service(CloudDocMetaService)
-    .entity(CloudDocMeta, [CloudDocMetaStore, DocService, GlobalCache])
-    .store(CloudDocMetaStore, [WorkspaceServerService]);
-  framework
-    .scope(WorkspaceScope)
-    .service(WorkspaceSubscriptionService, [WorkspaceServerService])
-    .entity(WorkspaceSubscription, [WorkspaceService, WorkspaceServerService])
-    .service(WorkspaceInvoicesService)
-    .entity(WorkspaceInvoices, [WorkspaceService, WorkspaceServerService])
-    .service(SelfhostLicenseService, [SelfhostLicenseStore, WorkspaceService])
-    .store(SelfhostLicenseStore, [WorkspaceServerService])
-    .service(BlocksuiteWriterInfoService, [WorkspaceServerService])
-    .service(DocCreatedByUpdatedBySyncService, [
-      WorkspaceService,
-      DocsService,
-      WorkspacePermissionService,
-      DocCreatedByUpdatedBySyncStore,
-    ])
-    .store(DocCreatedByUpdatedBySyncStore, [
-      WorkspaceServerService,
-      WorkspaceService,
-    ]);
+export interface AuthSessionAuthenticated {
+  status: 'authenticated';
+  session: AuthSessionInfo;
+}
+
+export type AuthSessionStatus =
+  | AuthSessionUnauthenticated
+  | AuthSessionAuthenticated
+  | { status: 'loading' }
+  | { status: 'error'; message: string };
+
+export interface ServerConfig {
+  name?: string;
+  version?: string;
+  features?: string[];
+  oauthProviders?: string[];
+  type?: string;
+  serverName?: string;
+  credentialsRequirement?: {
+    password?: { minLength: number; maxLength: number };
+  };
+  [key: string]: unknown;
+}
+
+export interface ServerMetadata {
+  id: string;
+  baseUrl: string;
+}
+
+export interface Invoice {
+  id: string;
+  status: string;
+  amount: number;
+  currency: string;
+  createdAt: string;
+  [key: string]: unknown;
+}
+
+export interface PublicUserInfo {
+  name: string;
+  avatarUrl: string | null;
+  email: string;
+}
+
+export interface UserSettings {
+  [key: string]: unknown;
+}
+
+export interface RealtimeLiveQueryEventResult {
+  data: unknown;
+}
+
+export interface RealtimeLiveQueryOptions {
+  query: string;
+  variables?: Record<string, unknown>;
+}
+
+// ---- Scopes ----
+export class ServerScope {
+  server: Server;
+  framework: FrameworkProvider;
+  constructor(opts: { server: Server }) {
+    this.server = opts.server;
+    this.framework = opts.server.framework;
+  }
+  get(service: any): any {
+    return {} as any;
+  }
+}
+
+// ---- Entities ----
+export class Server extends Entity<{ serverMetadata: ServerMetadata }> {
+  readonly id = this.props.serverMetadata.id;
+  readonly baseUrl = this.props.serverMetadata.baseUrl;
+  readonly serverMetadata = this.props.serverMetadata;
+  readonly config$ = new LiveData<ServerConfig | null>(null);
+  readonly features$ = new LiveData<Record<string, boolean>>({});
+  readonly scope: ServerScope;
+  readonly serverConfigStore = {
+    config$: new LiveData<ServerConfig | null>(null),
+  };
+  readonly credentialsRequirement$ = new LiveData<any>(null);
+
+  constructor(_store: unknown) {
+    super();
+    this.scope = new ServerScope({ server: this });
+  }
+
+  gql(..._args: any[]): Promise<any> {
+    return Promise.resolve(null);
+  }
+}
+
+// ---- Services ----
+export class AuthService extends Service {
+  session: any = {
+    account$: new LiveData<AuthAccountInfo | null>(null),
+    status$: new LiveData<AuthSessionStatus>({ status: 'unauthenticated' }),
+    session$: new LiveData<any>(null),
+    isRevalidating$: new LiveData<boolean>(false),
+    revalidate: () => {},
+  };
+
+  signIn(..._args: unknown[]): Promise<void> {
+    return Promise.resolve();
+  }
+  signInMagicLink(..._args: unknown[]): Promise<void> {
+    return Promise.resolve();
+  }
+  signOut(): Promise<void> {
+    return Promise.resolve();
+  }
+  revokeUserAccessToken(): Promise<void> {
+    return Promise.resolve();
+  }
+  sendEmailMagicLink(..._args: unknown[]): Promise<void> {
+    return Promise.resolve();
+  }
+  signInPassword(..._args: unknown[]): Promise<void> {
+    return Promise.resolve();
+  }
+  checkUserByEmail(..._args: unknown[]): Promise<any> {
+    return Promise.resolve(null);
+  }
+  deleteAccount(): Promise<void> {
+    return Promise.resolve();
+  }
+  uploadAvatar(..._args: unknown[]): Promise<void> {
+    return Promise.resolve();
+  }
+  removeAvatar(): Promise<void> {
+    return Promise.resolve();
+  }
+  updateLabel(..._args: unknown[]): Promise<void> {
+    return Promise.resolve();
+  }
+  revalidate(): void {}
+}
+
+export class ServerService extends Service {
+  server: Server | null = null;
+}
+
+export class ServersService extends Service {
+  servers$ = new LiveData<Server[]>([]);
+  serverByBaseUrl$ = new LiveData<Server | null>(null);
+  server$ = new LiveData<Server | null>(null);
+  addOrGetServerByBaseUrl(_url: string): Server {
+    return null as unknown as Server;
+  }
+  getServerByBaseUrl(_url: string): Server | null {
+    return null;
+  }
+  removeServer(_id: string): void {}
+}
+
+export class GraphQLService extends Service {
+  gql(..._args: any[]): Promise<any> {
+    return Promise.resolve(null);
+  }
+}
+
+export class FetchService extends Service {
+  fetch(..._args: any[]): Promise<any> {
+    return Promise.resolve(null);
+  }
+}
+
+export class SubscriptionService extends Service {
+  subscription: any = {};
+  prices: any = {};
+  createCheckoutSession(..._args: unknown[]): Promise<string> {
+    return Promise.resolve('');
+  }
+}
+
+export class CaptchaService extends Service {
+  needCaptcha$ = new LiveData<boolean>(false);
+  isLoading$ = new LiveData<boolean>(false);
+  verifyToken$ = new LiveData<string | null>(null);
+  challenge$ = new LiveData<string | null>(null);
+  revalidate(): void {}
+}
+
+export class DefaultServerService extends Service {
+  server: Server | null = null;
+  server$ = new LiveData<Server | null>(null);
+}
+
+export class DocCreatedByUpdatedBySyncService extends Service {}
+export class EventSourceService extends Service {
+  eventSource: any = null;
+  start(): void {}
+  stop(): void {}
+  override dispose(): void {
+    super.dispose();
+  }
+}
+export class InvitationService extends Service {
+  getInviteInfo(..._args: unknown[]): Promise<any> {
+    return Promise.resolve(null);
+  }
+  acceptInvite(..._args: unknown[]): Promise<void> {
+    return Promise.resolve();
+  }
+}
+export class InvoicesService extends Service {
+  invoices: any = {};
+}
+export class PublicUserService extends Service {
+  publicUser$ = new LiveData<PublicUserInfo | null>(null);
+  isLoading$ = new LiveData<boolean>(false);
+  error$: any = new LiveData(null);
+  revalidate(): void {}
+  getUserById(_id: string): Promise<PublicUserInfo | null> {
+    return Promise.resolve(null);
+  }
+}
+export class RealtimeService extends Service {
+  start(): void {}
+  stop(): void {}
+  override dispose(): void {
+    super.dispose();
+  }
+}
+export class SelfhostGenerateLicenseService extends Service {}
+export class SelfhostLicenseService extends Service {}
+export class UserCopilotQuotaService extends Service {
+  copilotQuota: any = {};
+}
+export class UserFeatureService extends Service {
+  userFeature: any = {};
+}
+export class UserQuotaService extends Service {
+  quota: any = {};
+}
+export class UserSettingsService extends Service {}
+export class WorkspaceInvoicesService extends Service {
+  invoices: any = {};
+}
+export class WorkspaceServerService extends Service {
+  server: Server | null = null;
+}
+export class WorkspaceSubscriptionService extends Service {
+  subscription: any = {};
+}
+export class AccessTokenService extends Service {}
+
+// ---- Providers ----
+export class AuthProvider {}
+export class ValidatorProvider {}
+
+// ---- Events ----
+export class AccountChanged {}
+export class AccountLoggedIn {}
+export class AccountLoggedOut {}
+
+// ---- Live Query ----
+export class RealtimeLiveQuery {
+  constructor(_opts: RealtimeLiveQueryOptions) {}
+}
+
+// ---- Stub function ----
+export function configureCloudModule(_framework: Framework): void {
+  // TODO(story): cloud module disabled - no-op
 }

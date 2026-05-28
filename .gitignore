@@ -93,3 +93,4 @@ af.cmd
 
 # playwright
 storageState.json
+.superpowers/

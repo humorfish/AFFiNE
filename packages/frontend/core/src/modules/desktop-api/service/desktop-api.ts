@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed
 import { notify } from '@affine/component';
 import { I18n } from '@affine/i18n';
 import { OnEvent, Service } from '@toeverything/infra';

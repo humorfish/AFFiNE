@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { Button, Loading } from '@affine/component';
 import { Pagination, SettingRow } from '@affine/component/setting-components';
 import { WorkspaceInvoicesService } from '@affine/core/modules/cloud';

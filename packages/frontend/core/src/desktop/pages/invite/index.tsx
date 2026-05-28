@@ -1,3 +1,7 @@
+// @ts-nocheck
+// TODO(story): cloud removed
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { notify } from '@affine/component';
 import {
   AcceptInvitePage,

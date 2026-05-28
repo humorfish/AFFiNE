@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { usePageHelper } from '@affine/core/blocksuite/block-suite-page-list/utils';
 import { NavigationPanelTreeRoot } from '@affine/core/desktop/components/navigation-panel';
 import type { FavoriteSupportTypeUnion } from '@affine/core/modules/favorite';

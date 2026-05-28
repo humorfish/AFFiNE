@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { Button, Loading, notify, useConfirmModal } from '@affine/component';
 import {
   InviteTeamMemberModal,

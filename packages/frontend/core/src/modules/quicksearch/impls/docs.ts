@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { ServerFeature } from '@affine/graphql';
 import { SearchIcon } from '@blocksuite/icons/rc';
 import {

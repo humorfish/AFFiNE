@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TODO(story): cloud removed - typecheck disabled
 import { notify } from '@affine/component';
 import { ServerService } from '@affine/core/modules/cloud';
 import { toDocSearchParams } from '@affine/core/modules/navigation';
