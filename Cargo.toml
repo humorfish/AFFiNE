@@ -1,6 +1,5 @@
 [workspace]
 members = [
-  "./packages/backend/native",
   "./packages/common/native",
   "./packages/common/y-octo/core",
   "./packages/common/y-octo/utils",

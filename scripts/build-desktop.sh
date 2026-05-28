@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# AFFiNE Desktop Build Script
+# Story Desktop Build Script
 # Usage: ./scripts/build-desktop.sh [options]
 #   --skip-native     Skip Rust native build
 #   --skip-web        Skip web renderer build (use existing web-static)
@@ -10,6 +10,7 @@ set -euo pipefail
 #   --arch NAME       Target arch: x64 (default), arm64
 #   --package-only    Only run packaging (assumes build is done)
 
+APP_NAME="Story"
 BUILD_TYPE="${BUILD_TYPE:-canary}"
 PLATFORM="${PLATFORM:-$(uname -s | tr '[:upper:]' '[:lower:]')}"
 ARCH="${ARCH:-$(uname -m)}"
@@ -54,7 +55,13 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ELECTRON_DIR="packages/frontend/apps/electron"
 cd "$PROJECT_ROOT"
 
-log "Building AFFiNE Desktop ($BUILD_TYPE) for $PLATFORM/$ARCH"
+log "Building $APP_NAME Desktop ($BUILD_TYPE) for $PLATFORM/$ARCH"
+
+# ─── Check prerequisites ───
+if ! command -v git &>/dev/null; then
+  err "git is not installed. Story requires git for document storage."
+fi
+log "git found: $(git --version)"
 
 # ─── Package only ───
 if [ "$PACKAGE_ONLY" = true ]; then
@@ -89,29 +96,18 @@ else
 fi
 
 # ─── Phase 3: Create electron-specific node_modules ───
-# Set up deps BEFORE building so transitive deps (e.g. @sentry/bundler-plugin-core)
-# are available during the build step. This must run before any build that needs them.
-# Instead of deleting ALL node_modules and reinstalling (very slow),
-# we only recreate electron's node_modules via workspaces focus.
 log "Phase 3: Setting up electron node_modules (workspaces focus)"
 
-# Remove only electron's node_modules (could be symlink or real dir)
 rm -rf "$ELECTRON_DIR/node_modules"
 
-# Temporarily switch to workspaces hoisting
 yarn config set nmMode classic 2>/dev/null || true
 yarn config set nmHoistingLimits workspaces 2>/dev/null || true
 
-# Pre-create symlink for the electron npm package to avoid ENOTSUP copyfile error.
-# The electron package contains a macOS Electron.app bundle with framework symlinks
-# (e.g. Helpers -> Versions/Current/Helpers) that macOS copyfile() cannot handle.
 mkdir -p "$ELECTRON_DIR/node_modules"
 ln -s "$PROJECT_ROOT/node_modules/electron" "$ELECTRON_DIR/node_modules/electron"
 
-# Install only electron workspace deps (much faster than full reinstall)
 yarn workspaces focus "@affine/electron" "@affine/monorepo" "@affine/nbstore" "@toeverything/infra"
 
-# Restore config immediately (electron's node_modules is already created)
 yarn config set nmMode hardlinks-local 2>/dev/null || true
 yarn config set nmHoistingLimits none 2>/dev/null || true
 
@@ -125,7 +121,7 @@ else
 fi
 
 # ─── Phase 5: Package / Make ───
-log "Phase 5: Packaging desktop app ($PLATFORM/$ARCH)"
+log "Phase 5: Packaging $APP_NAME desktop app ($PLATFORM/$ARCH)"
 if [ "$PLATFORM" = "win32" ]; then
   BUILD_TYPE="$BUILD_TYPE" SKIP_WEB_BUILD=1 HOIST_NODE_MODULES=1 \
     yarn affine "@affine/electron" package "--platform=$PLATFORM" "--arch=$ARCH"
@@ -140,8 +136,11 @@ log "Build complete!"
 log "Output: $OUT_DIR/"
 
 if [ "$PLATFORM" = "darwin" ]; then
-  APP_PATH="$OUT_DIR/AFFiNE-${BUILD_TYPE}-darwin-${ARCH}/AFFiNE-${BUILD_TYPE}.app"
+  APP_PATH="$OUT_DIR/$APP_NAME-${BUILD_TYPE}-darwin-${ARCH}/$APP_NAME-${BUILD_TYPE}.app"
   DMG_PATH=$(find "$OUT_DIR/make" -name "*.dmg" 2>/dev/null | head -1)
   [ -d "$APP_PATH" ] && log "App:    $APP_PATH"
   [ -n "$DMG_PATH" ] && [ -f "$DMG_PATH" ] && log "DMG:    $DMG_PATH"
 fi
+
+log ""
+log "$APP_NAME Desktop build finished successfully!"
