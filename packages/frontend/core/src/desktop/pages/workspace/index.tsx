@@ -37,7 +37,6 @@ import { map } from 'rxjs';
 import * as _Y from 'yjs';
 
 import { AffineErrorBoundary } from '../../../components/affine/affine-error-boundary';
-import { WorkbenchRoot } from '../../../modules/workbench';
 import { AppContainer } from '../../components/app-container';
 import { PageNotFound } from '../404';
 import { WorkspaceLayout } from './layouts/workspace-layout';
@@ -350,9 +349,7 @@ const WorkspacePage = ({ meta }: { meta: WorkspaceMetadata }) => {
       <DNDContextProvider>
         <OpenInAppGuard>
           <AffineErrorBoundary height="100vh">
-            <WorkspaceLayout>
-              <WorkbenchRoot />
-            </WorkspaceLayout>
+            <WorkspaceLayout />
           </AffineErrorBoundary>
         </OpenInAppGuard>
       </DNDContextProvider>
