@@ -1,0 +1,15 @@
+{
+  "name": "@affine/ai",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "nanoid": "^5.1.6"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  },
+  "version": "0.26.3"
+}
