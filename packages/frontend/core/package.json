@@ -8,6 +8,7 @@
     "./bootstrap": "./src/bootstrap/index.ts"
   },
   "dependencies": {
+    "@affine/ai": "workspace:*",
     "@affine/component": "workspace:*",
     "@affine/debug": "workspace:*",
     "@affine/electron-api": "workspace:*",
