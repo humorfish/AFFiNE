@@ -10,12 +10,10 @@ import { ProjectService } from './project-service.js';
 describe('ProjectService', () => {
   let tmpDir: string;
   let projectService: ProjectService;
-  let gitService: GitService;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'project-service-test-'));
-    gitService = new GitService(tmpDir);
-    projectService = new ProjectService(gitService);
+    projectService = new ProjectService();
   });
 
   afterEach(async () => {

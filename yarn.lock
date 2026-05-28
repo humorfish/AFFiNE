@@ -230,6 +230,15 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@affine/ai@workspace:packages/frontend/ai":
+  version: 0.0.0-use.local
+  resolution: "@affine/ai@workspace:packages/frontend/ai"
+  dependencies:
+    nanoid: "npm:^5.1.6"
+    vitest: "npm:^4.0.18"
+  languageName: unknown
+  linkType: soft
+
 "@affine/android@workspace:packages/frontend/apps/android":
   version: 0.0.0-use.local
   resolution: "@affine/android@workspace:packages/frontend/apps/android"
@@ -613,6 +622,14 @@ __metadata:
   peerDependencies:
     "@affine/graphql": "workspace:*"
     graphql: ^16.9.0
+  languageName: unknown
+  linkType: soft
+
+"@affine/git@workspace:*, @affine/git@workspace:packages/frontend/git":
+  version: 0.0.0-use.local
+  resolution: "@affine/git@workspace:packages/frontend/git"
+  dependencies:
+    vitest: "npm:^4.0.18"
   languageName: unknown
   linkType: soft
 
@@ -1042,6 +1059,15 @@ __metadata:
     yjs: "npm:^13.6.27"
     zod: "npm:^3.25.76"
     zod-to-json-schema: "npm:^3.20.0"
+  languageName: unknown
+  linkType: soft
+
+"@affine/story@workspace:packages/frontend/story":
+  version: 0.0.0-use.local
+  resolution: "@affine/story@workspace:packages/frontend/story"
+  dependencies:
+    "@affine/git": "workspace:*"
+    vitest: "npm:^4.0.18"
   languageName: unknown
   linkType: soft
 

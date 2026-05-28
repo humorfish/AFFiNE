@@ -1184,6 +1184,11 @@ export const PackageList = [
     ],
   },
   {
+    location: 'packages/frontend/ai',
+    name: '@affine/ai',
+    workspaceDependencies: [],
+  },
+  {
     location: 'packages/frontend/apps/android',
     name: '@affine/android',
     workspaceDependencies: [
@@ -1315,6 +1320,11 @@ export const PackageList = [
     workspaceDependencies: ['packages/frontend/apps/electron'],
   },
   {
+    location: 'packages/frontend/git',
+    name: '@affine/git',
+    workspaceDependencies: [],
+  },
+  {
     location: 'packages/frontend/i18n',
     name: '@affine/i18n',
     workspaceDependencies: [
@@ -1337,6 +1347,11 @@ export const PackageList = [
     location: 'packages/frontend/routes',
     name: '@affine/routes',
     workspaceDependencies: ['tools/cli', 'tools/utils'],
+  },
+  {
+    location: 'packages/frontend/story',
+    name: '@affine/story',
+    workspaceDependencies: ['packages/frontend/git'],
   },
   {
     location: 'packages/frontend/templates',
@@ -1536,6 +1551,7 @@ export type PackageName =
   | '@affine/realtime'
   | '@affine/s3-compat'
   | '@affine/admin'
+  | '@affine/ai'
   | '@affine/android'
   | '@affine/electron'
   | '@affine/electron-renderer'
@@ -1546,10 +1562,12 @@ export type PackageName =
   | '@affine/component'
   | '@affine/core'
   | '@affine/electron-api'
+  | '@affine/git'
   | '@affine/i18n'
   | '@affine/media-capture-playground'
   | '@affine/native'
   | '@affine/routes'
+  | '@affine/story'
   | '@affine/templates'
   | '@affine/track'
   | '@affine-test/affine-cloud'

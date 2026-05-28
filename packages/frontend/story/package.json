@@ -11,6 +11,6 @@
     "@affine/git": "workspace:*"
   },
   "devDependencies": {
-    "vitest": "workspace:*"
+    "vitest": "^4.0.18"
   }
 }

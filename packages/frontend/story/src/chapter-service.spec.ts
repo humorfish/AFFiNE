@@ -11,15 +11,13 @@ import { ProjectService } from './project-service.js';
 describe('ChapterService', () => {
   let tmpDir: string;
   let projectPath: string;
-  let gitService: GitService;
   let projectService: ProjectService;
   let chapterService: ChapterService;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'chapter-service-test-'));
     projectPath = join(tmpDir, 'my-novel');
-    gitService = new GitService(projectPath);
-    projectService = new ProjectService(gitService);
+    projectService = new ProjectService();
     await projectService.create(projectPath, {
       title: 'Test Novel',
       author: 'Test Author',

@@ -1,8 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { GitService } from '@affine/git';
-
 import type { BookMeta, NovelProject } from './types.js';
 
 export interface CreateProjectInput {
@@ -13,7 +11,7 @@ export interface CreateProjectInput {
 }
 
 export class ProjectService {
-  constructor(private readonly gitService: GitService) {}
+  constructor() {}
 
   async create(
     projectPath: string,
