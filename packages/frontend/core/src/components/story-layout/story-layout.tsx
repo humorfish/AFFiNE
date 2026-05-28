@@ -3,6 +3,7 @@ import './story-layout.css';
 import { useCallback, useState } from 'react';
 
 import { StoryAIPanel } from './story-ai-panel';
+import { StoryProvider } from './story-context';
 import { StoryEditorPanel } from './story-editor-panel';
 import { StorySidebar } from './story-sidebar';
 
@@ -29,39 +30,41 @@ export const StoryLayout = () => {
   const showAIPanel = !focusMode && !aiPanelCollapsed;
 
   return (
-    <div style={styles.root}>
-      {showSidebar && (
-        <StorySidebar
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
+    <StoryProvider>
+      <div style={styles.root}>
+        {showSidebar && (
+          <StorySidebar
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
+            theme={THEME}
+          />
+        )}
+        <StoryEditorPanel
+          focusMode={focusMode}
+          onFocusToggle={handleFocusToggle}
           theme={THEME}
         />
-      )}
-      <StoryEditorPanel
-        focusMode={focusMode}
-        onFocusToggle={handleFocusToggle}
-        theme={THEME}
-      />
-      {showAIPanel && (
-        <StoryAIPanel
-          onToggleCollapse={() => setAiPanelCollapsed(prev => !prev)}
-          theme={THEME}
-        />
-      )}
-      {/* Toggle button for AI panel when collapsed and not in focus mode */}
-      {!focusMode && aiPanelCollapsed && (
-        <button
-          onClick={() => setAiPanelCollapsed(false)}
-          style={{
-            ...styles.aiPanelToggle,
-            background: THEME.panel,
-            color: THEME.text,
-          }}
-        >
-          AI
-        </button>
-      )}
-    </div>
+        {showAIPanel && (
+          <StoryAIPanel
+            onToggleCollapse={() => setAiPanelCollapsed(prev => !prev)}
+            theme={THEME}
+          />
+        )}
+        {/* Toggle button for AI panel when collapsed and not in focus mode */}
+        {!focusMode && aiPanelCollapsed && (
+          <button
+            onClick={() => setAiPanelCollapsed(false)}
+            style={{
+              ...styles.aiPanelToggle,
+              background: THEME.panel,
+              color: THEME.text,
+            }}
+          >
+            AI
+          </button>
+        )}
+      </div>
+    </StoryProvider>
   );
 };
 

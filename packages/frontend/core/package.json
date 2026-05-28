@@ -10,6 +10,8 @@
   "dependencies": {
     "@affine/ai": "workspace:*",
     "@affine/component": "workspace:*",
+    "@affine/git": "workspace:*",
+    "@affine/story": "workspace:*",
     "@affine/debug": "workspace:*",
     "@affine/electron-api": "workspace:*",
     "@affine/env": "workspace:*",
