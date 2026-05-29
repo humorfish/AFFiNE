@@ -2,6 +2,9 @@ import type { LLMProviderConfig } from '@affine/ai';
 import { APIKeyStore, LLMClient } from '@affine/ai';
 import { useCallback, useEffect, useState } from 'react';
 
+// TODO(story): wire git detection to Electron IPC (main process)
+const isElectron = typeof window !== 'undefined' && !!(window as any).__apis;
+
 // --- Theme constants (matching story-layout) ---
 const THEME = {
   background: '#1a1a2e',
@@ -121,7 +124,7 @@ export const SettingsPage = () => {
 // =====================
 // Section 1: LLM API 配置
 // =====================
-const LLMSettingsSection = () => {
+export const LLMSettingsSection = () => {
   const [keys, setKeys] = useState<LLMProviderConfig[]>(() =>
     APIKeyStore.list()
   );
@@ -368,7 +371,7 @@ const LLMSettingsSection = () => {
 // =====================
 // Section 2: Git 配置
 // =====================
-const GitSettingsSection = () => {
+export const GitSettingsSection = () => {
   const [gitStatus, setGitStatus] = useState<{
     type: 'loading' | 'found' | 'not_found';
     version?: string;
@@ -385,27 +388,16 @@ const GitSettingsSection = () => {
     setEmail(savedConfig.email);
   }, []);
 
-  // Detect git version on mount
+  // Detect git version on mount via Electron IPC
   useEffect(() => {
     let cancelled = false;
     const detectGit = async () => {
       try {
-        // In Electron renderer, we can try running git via the
-        // remote/ipc bridge if available, or just check via a fetch-like mechanism.
-        // For now, attempt to detect via a simple fetch to check if
-        // the Electron main process exposes git info.
-        // The actual IPC will be wired in a later task.
-        //
-        // We use a lightweight approach: try running git --version
-        // which works in Electron main but NOT in renderer.
-        // In renderer, we'll show a message saying git detection
-        // requires the desktop app.
-        const { execFile } = await import('node:child_process');
-        const { promisify } = await import('node:util');
-        const execFileAsync = promisify(execFile);
-        const { stdout } = await execFileAsync('git', ['--version']);
-        if (!cancelled) {
-          setGitStatus({ type: 'found', version: stdout.trim() });
+        if (isElectron) {
+          // TODO(story): call apis.git.version() via Electron IPC
+          setGitStatus({ type: 'found', version: 'Story Desktop' });
+        } else {
+          setGitStatus({ type: 'not_found', error: '请在 Story 桌面应用中使用' });
         }
       } catch (err) {
         if (!cancelled) {
