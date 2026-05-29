@@ -107,6 +107,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#1a1a2e',
     overflow: 'hidden',
     position: 'relative',
+    paddingTop: 38,
+    boxSizing: 'border-box',
   },
   aiPanelToggle: {
     position: 'absolute',

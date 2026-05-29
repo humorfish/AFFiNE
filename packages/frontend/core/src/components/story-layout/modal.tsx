@@ -2,7 +2,7 @@ import { useCallback, useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 const THEME = {
-  overlay: 'rgba(0, 0, 0, 0.5)',
+  overlay: 'transparent',
   panel: '#16162a',
   panelBorder: '#2a2a4a',
   text: '#e0e0e0',
