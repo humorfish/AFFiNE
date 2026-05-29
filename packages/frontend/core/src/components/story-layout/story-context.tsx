@@ -1,20 +1,37 @@
-import { GitService } from '@affine/git';
-import {
-  type ChapterContent,
-  ChapterService,
-  type CreateProjectInput,
-  type NovelProject,
-  ProjectService,
-} from '@affine/story';
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
   useMemo,
-  useRef,
   useState,
 } from 'react';
+
+export interface ChapterMeta {
+  index: number;
+  title: string;
+  wordCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChapterContent {
+  meta: ChapterMeta;
+  content: string;
+}
+
+export interface NovelProject {
+  id: string;
+  path: string;
+  meta: {
+    title: string;
+    author: string;
+    description: string;
+    wordCountTarget: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+}
 
 export interface StoryState {
   project: NovelProject | null;
@@ -26,8 +43,7 @@ export interface StoryState {
 }
 
 interface StoryActions {
-  createProject: (path: string, input: CreateProjectInput) => Promise<void>;
-  openProject: (path: string) => Promise<void>;
+  createProject: (input: { title: string; author: string; description: string; wordCountTarget: number }, workspacePath: string) => Promise<void>;
   addChapter: (title: string, content: string) => Promise<void>;
   selectChapter: (index: number) => Promise<void>;
   updateChapterContent: (content: string) => Promise<void>;
@@ -48,49 +64,35 @@ export function useStory(): StoryContextValue {
 export function StoryProvider({ children }: { children: ReactNode }) {
   const [project, setProject] = useState<NovelProject | null>(null);
   const [chapters, setChapters] = useState<ChapterContent[]>([]);
-  const [activeChapterIndex, setActiveChapterIndex] = useState<number | null>(
-    null
-  );
+  const [activeChapterIndex, setActiveChapterIndex] = useState<number | null>(null);
   const [activeModule, setActiveModule] = useState('chapters');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Keep service instances in refs so they survive re-renders
-  const projectServiceRef = useRef<ProjectService | null>(null);
-  const chapterServiceRef = useRef<ChapterService | null>(null);
-  const gitServiceRef = useRef<GitService | null>(null);
-
-  const getProjectService = useCallback(() => {
-    if (!projectServiceRef.current) {
-      projectServiceRef.current = new ProjectService();
-    }
-    return projectServiceRef.current;
-  }, []);
-
-  const loadChapters = useCallback(async (projectPath: string) => {
-    if (!gitServiceRef.current) {
-      gitServiceRef.current = new GitService(projectPath);
-    }
-    const chapterService = new ChapterService(
-      gitServiceRef.current,
-      projectPath
-    );
-    chapterServiceRef.current = chapterService;
-    const chapterList = await chapterService.list();
-    setChapters(chapterList);
-  }, []);
-
   const createProject = useCallback(
-    async (path: string, input: CreateProjectInput) => {
+    async (
+      input: { title: string; author: string; description: string; wordCountTarget: number },
+      workspacePath: string
+    ) => {
       setLoading(true);
       setError(null);
       try {
-        const svc = getProjectService();
-        const newProject = await svc.create(path, input);
+        const id = crypto.randomUUID();
+        const projectPath = `${workspacePath}/projects/${id}`;
+        const newProject: NovelProject = {
+          id,
+          path: projectPath,
+          meta: {
+            title: input.title,
+            author: input.author,
+            description: input.description,
+            wordCountTarget: input.wordCountTarget,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        };
         setProject(newProject);
-        // Re-initialize git service for the new project
-        gitServiceRef.current = new GitService(newProject.path);
-        await loadChapters(newProject.path);
+        setChapters([]);
         setActiveChapterIndex(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -98,42 +100,24 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     },
-    [getProjectService, loadChapters]
+    []
   );
 
-  const openProject = useCallback(
-    async (path: string) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const svc = getProjectService();
-        const opened = await svc.open(path);
-        setProject(opened);
-        // Re-initialize git service for the opened project
-        gitServiceRef.current = new GitService(opened.path);
-        await loadChapters(opened.path);
-        setActiveChapterIndex(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [getProjectService, loadChapters]
-  );
-
+  
   const addChapter = useCallback(
     async (title: string, content: string) => {
-      if (!project || !chapterServiceRef.current) return;
+      if (!project) return;
       setLoading(true);
       setError(null);
       try {
-        const svc = chapterServiceRef.current;
-        // Next index is chapters.length + 1 (1-based)
+        // TODO(story): wire to Electron IPC → main process → @affine/story ChapterService
         const index = chapters.length + 1;
-        await svc.create(index, title, content);
-        await loadChapters(project.path);
-        // Select the newly added chapter
+        const now = new Date().toISOString();
+        const newChapter: ChapterContent = {
+          meta: { index, title, wordCount: content.length, createdAt: now, updatedAt: now },
+          content,
+        };
+        setChapters(prev => [...prev, newChapter]);
         setActiveChapterIndex(index);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -141,22 +125,19 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     },
-    [project, chapters.length, loadChapters]
+    [project, chapters.length]
   );
 
   const selectChapter = useCallback(async (index: number) => {
     setActiveChapterIndex(index);
-    // Chapter data is already loaded in the chapters state
   }, []);
 
   const updateChapterContent = useCallback(
     async (content: string) => {
-      if (activeChapterIndex === null || !chapterServiceRef.current) return;
+      if (activeChapterIndex === null) return;
       setError(null);
       try {
-        const svc = chapterServiceRef.current;
-        await svc.update(activeChapterIndex, content);
-        // Optimistically update the chapter in state
+        // TODO(story): wire to Electron IPC → main process → @affine/story ChapterService
         setChapters(prev =>
           prev.map(ch =>
             ch.meta.index === activeChapterIndex
@@ -181,23 +162,22 @@ export function StoryProvider({ children }: { children: ReactNode }) {
 
   const deleteChapter = useCallback(
     async (index: number) => {
-      if (!project || !chapterServiceRef.current) return;
+      if (!project) return;
       setLoading(true);
       setError(null);
       try {
-        const svc = chapterServiceRef.current;
-        await svc.delete(index);
+        // TODO(story): wire to Electron IPC → main process → @affine/story ChapterService
+        setChapters(prev => prev.filter(ch => ch.meta.index !== index));
         if (activeChapterIndex === index) {
           setActiveChapterIndex(null);
         }
-        await loadChapters(project.path);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
         setLoading(false);
       }
     },
-    [project, activeChapterIndex, loadChapters]
+    [project, activeChapterIndex]
   );
 
   const value = useMemo<StoryContextValue>(
@@ -209,7 +189,6 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       createProject,
-      openProject,
       addChapter,
       selectChapter,
       updateChapterContent,
@@ -224,7 +203,6 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       createProject,
-      openProject,
       addChapter,
       selectChapter,
       updateChapterContent,
