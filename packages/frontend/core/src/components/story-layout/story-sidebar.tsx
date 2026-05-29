@@ -15,7 +15,7 @@ interface StorySidebarProps {
   };
 }
 
-const NAV_ITEMS = [
+export const NAV_ITEMS = [
   { id: 'chapters', label: '章节管理', icon: '\u{1F4D6}' },
   { id: 'characters', label: '人物', icon: '\u{1F464}' },
   { id: 'worldview', label: '世界观', icon: '\u{1F30D}' },

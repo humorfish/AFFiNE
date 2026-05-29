@@ -1,11 +1,16 @@
-import './story-layout.css';
-
 import { useCallback, useState } from 'react';
 
+import './story-layout.css';
+
 import { StoryAIPanel } from './story-ai-panel';
+import { ChaptersDialog } from './chapters-dialog';
 import { StoryProvider } from './story-context';
 import { StoryEditorPanel } from './story-editor-panel';
-import { StorySidebar } from './story-sidebar';
+import { StorySidebar, NAV_ITEMS } from './story-sidebar';
+import { NewProjectDialog } from './new-project-dialog';
+import { PlaceholderDialog } from './placeholder-dialog';
+import { SettingsDialog } from './settings-dialog';
+import { WorkspaceProvider } from './workspace-provider';
 
 const THEME = {
   background: '#1a1a2e',
@@ -20,6 +25,7 @@ export const StoryLayout = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [aiPanelCollapsed, setAiPanelCollapsed] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
+  const [activeModal, setActiveModal] = useState<string | null>(null);
 
   const handleFocusToggle = useCallback(() => {
     setFocusMode(prev => !prev);
@@ -30,41 +36,66 @@ export const StoryLayout = () => {
   const showAIPanel = !focusMode && !aiPanelCollapsed;
 
   return (
-    <StoryProvider>
-      <div style={styles.root}>
-        {showSidebar && (
-          <StorySidebar
-            collapsed={sidebarCollapsed}
-            onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
+    <WorkspaceProvider>
+      <StoryProvider>
+        <div style={styles.root}>
+          {showSidebar && (
+            <StorySidebar
+              collapsed={sidebarCollapsed}
+              onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
+              onNavClick={(id) => setActiveModal(id)}
+              onNewProject={() => setActiveModal('new-project')}
+              theme={THEME}
+            />
+          )}
+          <StoryEditorPanel
+            focusMode={focusMode}
+            onFocusToggle={handleFocusToggle}
             theme={THEME}
           />
-        )}
-        <StoryEditorPanel
-          focusMode={focusMode}
-          onFocusToggle={handleFocusToggle}
-          theme={THEME}
+          {showAIPanel && (
+            <StoryAIPanel
+              onToggleCollapse={() => setAiPanelCollapsed(prev => !prev)}
+              theme={THEME}
+            />
+          )}
+          {/* Toggle button for AI panel when collapsed and not in focus mode */}
+          {!focusMode && aiPanelCollapsed && (
+            <button
+              onClick={() => setAiPanelCollapsed(false)}
+              style={{
+                ...styles.aiPanelToggle,
+                background: THEME.panel,
+                color: THEME.text,
+              }}
+            >
+              AI
+            </button>
+          )}
+        </div>
+
+        {/* Dialogs */}
+        <ChaptersDialog
+          open={activeModal === 'chapters'}
+          onClose={() => setActiveModal(null)}
         />
-        {showAIPanel && (
-          <StoryAIPanel
-            onToggleCollapse={() => setAiPanelCollapsed(prev => !prev)}
-            theme={THEME}
+        <NewProjectDialog
+          open={activeModal === 'new-project'}
+          onClose={() => setActiveModal(null)}
+        />
+        <SettingsDialog
+          open={activeModal === 'settings'}
+          onClose={() => setActiveModal(null)}
+        />
+        {activeModal && !['chapters', 'new-project', 'settings'].includes(activeModal) && (
+          <PlaceholderDialog
+            open
+            title={NAV_ITEMS.find(n => n.id === activeModal)?.label ?? activeModal}
+            onClose={() => setActiveModal(null)}
           />
         )}
-        {/* Toggle button for AI panel when collapsed and not in focus mode */}
-        {!focusMode && aiPanelCollapsed && (
-          <button
-            onClick={() => setAiPanelCollapsed(false)}
-            style={{
-              ...styles.aiPanelToggle,
-              background: THEME.panel,
-              color: THEME.text,
-            }}
-          >
-            AI
-          </button>
-        )}
-      </div>
-    </StoryProvider>
+      </StoryProvider>
+    </WorkspaceProvider>
   );
 };
 
