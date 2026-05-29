@@ -1,4 +1,4 @@
-import {
+import React, {
   createContext,
   type ReactNode,
   useCallback,
@@ -6,6 +6,11 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { Schema, Text } from '@blocksuite/affine/store';
+import type { Store } from '@blocksuite/affine/store';
+import { TestWorkspace } from '@blocksuite/affine/store/test';
+import { AffineSchemas } from '@blocksuite/affine/schemas';
+import { NoopDocSource, MemoryBlobSource } from '@blocksuite/affine/sync';
 
 export interface ChapterMeta {
   index: number;
@@ -49,11 +54,34 @@ interface StoryActions {
   updateChapterContent: (content: string) => Promise<void>;
   deleteChapter: (index: number) => Promise<void>;
   setActiveModule: (module: string) => void;
+  getChapterStore: (chapterIndex: number) => Store | null;
 }
 
 type StoryContextValue = StoryState & StoryActions;
 
 const StoryContext = createContext<StoryContextValue | null>(null);
+
+// BlockSuite workspace singleton for Story
+const bsSchema = new Schema();
+bsSchema.register(AffineSchemas);
+
+const bsWorkspace = new TestWorkspace({
+  id: 'story-editor',
+  docSources: { main: new NoopDocSource() },
+  blobSources: { main: new MemoryBlobSource() },
+});
+bsWorkspace.meta.initialize();
+
+function createChapterStore(chapterId: string): Store {
+  const doc = bsWorkspace.createDoc(`chapter:${chapterId}`);
+  doc.load();
+  const store = doc.getStore();
+  const rootId = store.addBlock('affine:page', { title: new Text('') });
+  store.addBlock('affine:surface', {}, rootId);
+  const noteId = store.addBlock('affine:note', {}, rootId);
+  store.addBlock('affine:paragraph', {}, noteId);
+  return store;
+}
 
 export function useStory(): StoryContextValue {
   const ctx = useContext(StoryContext);
@@ -68,6 +96,21 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   const [activeModule, setActiveModule] = useState('chapters');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const chapterStores = React.useMemo(() => new Map<number, Store>(), []);
+
+  const getChapterStore = React.useCallback((chapterIndex: number): Store | null => {
+    const existing = chapterStores.get(chapterIndex);
+    if (existing) return existing;
+    try {
+      const store = createChapterStore(`ch-${chapterIndex}`);
+      chapterStores.set(chapterIndex, store);
+      return store;
+    } catch (err) {
+      console.error('Failed to create BlockSuite chapter store:', err);
+      return null;
+    }
+  }, [chapterStores]);
 
   const createProject = useCallback(
     async (
@@ -194,6 +237,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       updateChapterContent,
       deleteChapter,
       setActiveModule,
+      getChapterStore,
     }),
     [
       project,
@@ -208,6 +252,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       updateChapterContent,
       deleteChapter,
       setActiveModule,
+      getChapterStore,
     ]
   );
 

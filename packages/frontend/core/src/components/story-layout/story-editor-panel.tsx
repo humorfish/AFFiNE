@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Store } from '@blocksuite/affine/store';
+import { EditorHost } from '@blocksuite/std';
 
 import { useStory } from './story-context';
 
@@ -15,12 +17,43 @@ interface StoryEditorPanelProps {
   };
 }
 
+function BlockSuiteEditor({ store }: { store: Store }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !store) return;
+    container.innerHTML = '';
+    try {
+      const editorHost = new EditorHost();
+      (editorHost as any).store = store;
+      container.appendChild(editorHost);
+    } catch (err) {
+      console.error('Failed to create BlockSuite editor:', err);
+    }
+    return () => {
+      container.innerHTML = '';
+    };
+  }, [store]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        flex: 1,
+        overflow: 'auto',
+        padding: '24px',
+      }}
+    />
+  );
+}
+
 export const StoryEditorPanel = ({
   focusMode,
   onFocusToggle,
   theme,
 }: StoryEditorPanelProps) => {
-  const { project, chapters, activeChapterIndex, updateChapterContent, error } =
+  const { project, chapters, activeChapterIndex, updateChapterContent, error, getChapterStore } =
     useStory();
 
   // Find active chapter data
@@ -28,6 +61,8 @@ export const StoryEditorPanel = ({
     activeChapterIndex !== null
       ? chapters.find(ch => ch.meta.index === activeChapterIndex)
       : null;
+
+  const activeChapterStore = activeChapterIndex !== null ? getChapterStore(activeChapterIndex) : null;
 
   // Local editor state (tracks the textarea value before debounced save)
   const [editorContent, setEditorContent] = useState('');
@@ -268,34 +303,38 @@ export const StoryEditorPanel = ({
         </div>
       </div>
 
-      {/* Editor area - textarea for now (BlockSuite integration later) */}
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          padding: '24px',
-          overflow: 'auto',
-        }}
-      >
-        <textarea
-          value={editorContent}
-          onChange={e => handleContentChange(e.target.value)}
-          placeholder="开始写作..."
+      {/* Editor area */}
+      {activeChapterStore ? (
+        <BlockSuiteEditor store={activeChapterStore} />
+      ) : (
+        <div
           style={{
             flex: 1,
-            background: 'transparent',
-            border: 'none',
-            outline: 'none',
-            color: theme.text,
-            fontSize: '16px',
-            lineHeight: 1.8,
-            resize: 'none',
-            fontFamily:
-              '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-            padding: 0,
+            display: 'flex',
+            padding: '24px',
+            overflow: 'auto',
           }}
-        />
-      </div>
+        >
+          <textarea
+            value={editorContent}
+            onChange={e => handleContentChange(e.target.value)}
+            placeholder="开始写作..."
+            style={{
+              flex: 1,
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              color: theme.text,
+              fontSize: '16px',
+              lineHeight: 1.8,
+              resize: 'none',
+              fontFamily:
+                '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+              padding: 0,
+            }}
+          />
+        </div>
+      )}
 
       {/* Bottom bar */}
       <div
