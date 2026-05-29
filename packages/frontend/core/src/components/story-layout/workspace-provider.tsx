@@ -65,14 +65,13 @@ function WorkspacePickerModal({ onSelect }: { onSelect: (path: string) => void }
     setError(null);
     try {
       const { apis } = await import('@affine/electron-api');
-      const result = await apis?.dialog?.openDialog?.({
-        type: 'folder' as const,
+      // Use helper.showOpenDialog via IPC
+      const result = await (apis as any)?.helper?.showOpenDialog?.({
+        properties: ['openDirectory', 'createDirectory'],
         title: '选择工作区目录',
       });
-      if (result && typeof result === 'string') {
-        onSelect(result);
-      } else if (result && Array.isArray(result) && result.length > 0) {
-        onSelect(result[0]);
+      if (result?.filePaths?.length > 0) {
+        onSelect(result.filePaths[0]);
       }
     } catch {
       setError('无法打开文件选择器，请手动输入路径');

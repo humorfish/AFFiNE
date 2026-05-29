@@ -37,14 +37,12 @@ function WorkspaceSection({
   const handleBrowse = useCallback(async () => {
     try {
       const { apis } = await import('@affine/electron-api');
-      const result = await apis?.dialog?.openDialog?.({
-        type: 'folder' as const,
+      const result = await (apis as any)?.helper?.showOpenDialog?.({
+        properties: ['openDirectory', 'createDirectory'],
         title: '更改工作区目录',
       });
-      if (result && typeof result === 'string') {
-        onWorkspaceChange(result);
-      } else if (Array.isArray(result) && result.length > 0) {
-        onWorkspaceChange(result[0]);
+      if (result?.filePaths?.length > 0) {
+        onWorkspaceChange(result.filePaths[0]);
       }
     } catch {
       // fallback: ignore
