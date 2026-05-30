@@ -60,7 +60,7 @@ const aiServiceStubs = {
     getCollectionPageIds: () => [],
   },
   serverService: { server: { config$: stubSignal({ type: 'local' }) } },
-  affineFeatureFlagService: { flags: {} },
+  affineFeatureFlagService: { flags: { enable_send_detailed_object_to_ai: stubSignal(false) } },
   affineWorkspaceDialogService: {},
   affineThemeService: { theme$: stubSignal('dark') },
   notificationService: { toast: () => {} },
