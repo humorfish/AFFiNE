@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
-import { AIChatRuntime } from '../../../blocksuite/ai/runtime/chat/runtime';
-import { WorkspaceAIChatSessionStrategy } from '../../../blocksuite/ai/runtime/chat/session-strategy';
-import { useAIChatRuntime } from '../../../blocksuite/ai/runtime/chat/use-runtime';
-import { useAIChatElement } from '../../../blocksuite/ai/runtime/chat/use-element';
+import { AIChatRuntime } from '../../blocksuite/ai/runtime/chat/runtime';
+import { WorkspaceAIChatSessionStrategy } from '../../blocksuite/ai/runtime/chat/session-strategy';
+import { useAIChatRuntime } from '../../blocksuite/ai/runtime/chat/use-runtime';
+import { useAIChatElement } from '../../blocksuite/ai/runtime/chat/use-element';
 import { getStoryAIRequestService } from './ai/setup';
 
 import './story-layout.css';
