@@ -1,2 +1,7 @@
 /* Story layout global styles */
-/* Minimal reset for story layout */
+
+/* Hide BlockSuite's format toolbar — also hidden programmatically in AffineEditorWrapper
+   (CSS can't reach into shadow DOM, so this is a belt-and-suspenders approach) */
+affine-toolbar-widget {
+  display: none !important;
+}

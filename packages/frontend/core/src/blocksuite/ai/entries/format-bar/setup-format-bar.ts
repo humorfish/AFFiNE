@@ -15,7 +15,9 @@ export function toolbarAIEntryConfig(): ToolbarModuleConfig {
         placement: ActionPlacement.Start,
         id: 'A.ai',
         score: -1,
-        when: ({ flags }) => !flags.isNative(),
+        // Never show the old AI toolbar button in Story app.
+        // Story uses its own AI popup (see StoryAIPopupManager).
+        when: () => false,
         content: ({ host }) => html`
           <ask-ai-toolbar-button
             .host=${host}
