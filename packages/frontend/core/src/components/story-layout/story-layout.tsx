@@ -65,7 +65,11 @@ const aiServiceStubs = {
   affineThemeService: { theme$: stubSignal('dark') },
   notificationService: { toast: () => {} },
   aiDraftService: undefined,
-  aiToolsConfigService: { getToolsConfig: () => ({}) },
+  aiToolsConfigService: {
+    getToolsConfig: () => ({}),
+    config: stubSignal({ searchWorkspace: false, readingDocs: false }),
+    setConfig: () => {},
+  },
   aiModelService: {
     models: stubSignal([{ id: 'default', name: 'Default', category: 'Default', version: '1.0', isDefault: true, isPro: false }]),
     modelId: stubSignal('default'),
