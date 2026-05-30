@@ -1,17 +1,12 @@
 // @ts-nocheck
-// Custom AIRequestService that uses LLMClient directly instead of AFFiNE's CopilotClient/GraphQL
+// Custom AIRequestService that uses HTTP/SSE calls to the backend server
+// instead of direct LLMClient calls.
 
 import { Subject } from 'rxjs';
-
-import { LLMClient, APIKeyStore } from '@affine/ai';
 
 import type {
   AIActionId,
   AIActionOptions,
-} from '../../../blocksuite/ai/runtime/request/action-definitions';
-import {
-  getActionDefinition,
-  resolveDefinitionValue,
 } from '../../../blocksuite/ai/runtime/request/action-definitions';
 import type { ActionEventType } from '../../../blocksuite/ai/provider';
 
@@ -23,42 +18,7 @@ export type AIRequestActionEvent = {
   event: ActionEventType;
 };
 
-// Prompt templates for known actions
-const actionPrompts: Record<string, string> = {
-  chat: 'You are a helpful AI writing assistant.',
-  summary: 'Summarize the following text concisely:',
-  translate: 'Translate the following text:',
-  changeTone: 'Rewrite the following text with a different tone:',
-  improveWriting: 'Improve the writing quality of the following text:',
-  improveGrammar: 'Fix grammar errors in the following text:',
-  fixSpelling: 'Fix spelling errors in the following text:',
-  createHeadings: 'Create headings for the following text:',
-  makeLonger: 'Expand and elaborate on the following text:',
-  makeShorter: 'Condense the following text while keeping key information:',
-  explain: 'Explain the following text clearly:',
-  explainCode: 'Explain this code:',
-  checkCodeErrors: 'Check for errors in this code and suggest fixes:',
-  writeArticle: 'Write an article based on the following:',
-  writeTwitterPost: 'Write a Twitter post based on the following:',
-  writePoem: 'Write a poem based on the following:',
-  writeOutline: 'Write an outline based on the following:',
-  writeBlogPost: 'Write a blog post based on the following:',
-  brainstorm: 'Brainstorm ideas based on the following:',
-  findActions: 'Extract action items from the following:',
-  continueWriting: 'Continue writing from where the following text ends:',
-  generateCaption: 'Generate a caption for the following:',
-};
-
-function getLLMClient(): LLMClient | null {
-  const configs = APIKeyStore.list();
-  if (configs.length === 0) return null;
-  const config = configs[0];
-  return new LLMClient({
-    baseURL: config.baseURL,
-    apiKey: config.apiKey,
-    model: config.model,
-  });
-}
+const API_BASE = 'http://localhost:3001/api/ai';
 
 export class StoryAIRequestService {
   private lastActionSessionId = '';
@@ -68,7 +28,7 @@ export class StoryAIRequestService {
   }[] = [];
   readonly actionEvents$ = new Subject<AIRequestActionEvent>();
 
-  // Session storage (memory placeholder, will be persisted later)
+  // Session storage (memory, mirrored to backend)
   private readonly sessions = new Map<
     string,
     {
@@ -79,7 +39,8 @@ export class StoryAIRequestService {
   >();
 
   isReady() {
-    return APIKeyStore.list().length > 0;
+    // Backend handles API keys, so always ready
+    return true;
   }
 
   async createSession(options: CreateSessionOptions): Promise<string> {
@@ -92,6 +53,23 @@ export class StoryAIRequestService {
       promptName: options.promptName ?? '',
       messages: [],
     });
+
+    // Persist to backend
+    try {
+      await fetch(`${API_BASE}/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          workspaceId: options.workspaceId ?? 'story-workspace',
+          docId: options.docId,
+          promptName: options.promptName ?? '',
+        }),
+      });
+    } catch {
+      // Backend unreachable — session stays in memory
+    }
+
     return sessionId;
   }
 
@@ -114,8 +92,19 @@ export class StoryAIRequestService {
     };
   }
 
-  getSessions(_workspaceId: string, _docId?: string) {
-    return Promise.resolve([]);
+  async getSessions(_workspaceId: string, _docId?: string) {
+    try {
+      const params = new URLSearchParams();
+      if (_workspaceId) params.set('workspaceId', _workspaceId);
+      if (_docId) params.set('docId', _docId);
+      const res = await fetch(`${API_BASE}/sessions?${params.toString()}`);
+      if (res.ok) {
+        return (await res.json()) as BlockSuitePresets.AISession[];
+      }
+    } catch {
+      // fallback to empty
+    }
+    return [];
   }
 
   getRecentSessions(_workspaceId: string, _limit?: number, _offset?: number) {
@@ -126,15 +115,19 @@ export class StoryAIRequestService {
     return Promise.resolve();
   }
 
-  cleanupSessions(_input: {
+  async cleanupSessions(input: {
     workspaceId: string;
     docId: string | undefined;
     sessionIds: string[];
   }) {
-    for (const id of _input.sessionIds) {
+    for (const id of input.sessionIds) {
       this.sessions.delete(id);
+      try {
+        await fetch(`${API_BASE}/sessions/${id}`, { method: 'DELETE' });
+      } catch {
+        // ignore
+      }
     }
-    return Promise.resolve();
   }
 
   histories = {
@@ -225,62 +218,134 @@ export class StoryAIRequestService {
     }
     this.actionEvents$.next({ action: id, options, event: 'started' });
 
-    const client = getLLMClient();
-    if (!client) {
-      throw new Error('LLM API not configured. Please configure in Settings.');
-    }
-
-    const definition = getActionDefinition(id);
-    const content = definition.buildContent?.(options) ?? options.input ?? '';
-
-    // Build system prompt
-    const promptName = resolveDefinitionValue(definition.promptName, options);
-    const systemPrompt =
-      actionPrompts[id] ?? `You are an AI assistant. Action: ${promptName}`;
-
-    // Add language/tone params if applicable
-    const params = definition.buildParams?.(options);
-    let finalContent = content;
-    if (params) {
-      if (params.language) {
-        finalContent = `Target language: ${params.language}\n\n${finalContent}`;
-      }
-      if (params.tone) {
-        finalContent = `Target tone: ${params.tone}\n\n${finalContent}`;
-      }
-    }
-
     const sessionId = await this.createSession({
-      promptName,
+      promptName: id,
       ...options,
     } as CreateSessionOptions);
     this.lastActionSessionId = sessionId;
 
     // Store user message in session
     const session = this.sessions.get(sessionId);
+    const input = options.input ?? '';
     if (session) {
-      session.messages.push({ role: 'user', content: finalContent });
+      session.messages.push({ role: 'user', content: input });
     }
 
-    // Create the stream using LLMClient
-    const stream = client.stream(finalContent, {
-      systemPrompt,
-      temperature: 0.7,
-    });
-
-    // Wrap stream to track events
     const actionEvents$ = this.actionEvents$;
     const sessions = this.sessions;
     const sid = sessionId;
 
+    // POST to backend chat endpoint with SSE streaming
+    const response = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify({
+        action: id,
+        sessionId,
+        workspaceId: options.workspaceId ?? 'story-workspace',
+        docId: options.docId,
+        input,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      actionEvents$.next({ action: id, options, event: 'error' });
+      throw new Error(`AI request failed (${response.status}): ${errorText}`);
+    }
+
+    const body = response.body;
+    if (!body) {
+      actionEvents$.next({ action: id, options, event: 'error' });
+      throw new Error('No response body for SSE stream');
+    }
+
+    // Parse SSE stream and yield text deltas
     return {
       async *[Symbol.asyncIterator]() {
+        const reader = body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
         let fullResponse = '';
+
         try {
-          for await (const chunk of stream) {
-            fullResponse += chunk;
-            yield chunk;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            // Keep the last potentially incomplete line in buffer
+            buffer = lines.pop() ?? '';
+
+            let currentEvent = '';
+            for (const line of lines) {
+              if (line.startsWith('event: ')) {
+                currentEvent = line.slice(7).trim();
+              } else if (line.startsWith('data: ')) {
+                const dataStr = line.slice(6);
+                if (currentEvent === 'done') {
+                  // Stream complete
+                  break;
+                } else if (currentEvent === 'error') {
+                  let errorMessage = 'Unknown SSE error';
+                  try {
+                    const parsed = JSON.parse(dataStr);
+                    errorMessage = parsed.message ?? errorMessage;
+                  } catch {
+                    // use default message
+                  }
+                  throw new Error(errorMessage);
+                } else if (currentEvent === 'message_delta') {
+                  try {
+                    const parsed = JSON.parse(dataStr);
+                    const text = parsed.text ?? '';
+                    if (text) {
+                      fullResponse += text;
+                      yield text;
+                    }
+                  } catch {
+                    // skip malformed data
+                  }
+                }
+                // Reset event for next SSE message
+                currentEvent = '';
+              } else if (line.trim() === '') {
+                // Blank line = end of SSE message, reset event
+                currentEvent = '';
+              }
+            }
           }
+
+          // Process any remaining buffer
+          if (buffer.trim()) {
+            const remainingLines = buffer.split('\n');
+            let currentEvent = '';
+            for (const line of remainingLines) {
+              if (line.startsWith('event: ')) {
+                currentEvent = line.slice(7).trim();
+              } else if (line.startsWith('data: ')) {
+                const dataStr = line.slice(6);
+                if (currentEvent === 'message_delta') {
+                  try {
+                    const parsed = JSON.parse(dataStr);
+                    const text = parsed.text ?? '';
+                    if (text) {
+                      fullResponse += text;
+                      yield text;
+                    }
+                  } catch {
+                    // skip
+                  }
+                }
+              }
+            }
+          }
+
           // Store assistant response in session
           const s = sessions.get(sid);
           if (s) {

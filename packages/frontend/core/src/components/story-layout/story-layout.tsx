@@ -1,9 +1,13 @@
-import { useCallback, useRef, useState } from 'react';
-import type { StoryAIHandle } from './story-ai-panel';
+import { useCallback, useMemo, useRef, useState } from 'react';
+
+import { AIChatRuntime } from '../../../blocksuite/ai/runtime/chat/runtime';
+import { WorkspaceAIChatSessionStrategy } from '../../../blocksuite/ai/runtime/chat/session-strategy';
+import { useAIChatRuntime } from '../../../blocksuite/ai/runtime/chat/use-runtime';
+import { useAIChatElement } from '../../../blocksuite/ai/runtime/chat/use-element';
+import { getStoryAIRequestService } from './ai/setup';
 
 import './story-layout.css';
 
-import { StoryAIPanel } from './story-ai-panel';
 import { ChaptersDialog } from './chapters-dialog';
 import { StoryFrameworkRoot } from './story-framework';
 import { StoryProvider } from './story-context';
@@ -29,23 +33,42 @@ export const StoryLayout = () => {
   const [focusMode, setFocusMode] = useState(false);
   const [activeModal, setActiveModal] = useState<string | null>(null);
 
-  const aiPanelRef = useRef<StoryAIHandle>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  const requestService = getStoryAIRequestService();
+  const runtime = useMemo(() => {
+    if (!requestService) return null;
+    return new AIChatRuntime({
+      request: requestService,
+      scope: { kind: 'workspace', workspaceId: 'story-workspace' },
+      strategy: new WorkspaceAIChatSessionStrategy(),
+    });
+  }, [requestService]);
+  const snapshot = useAIChatRuntime(runtime);
+
+  // In focus mode, hide both sidebars
+  const showSidebar = !focusMode;
+  const showAIPanel = !focusMode && !aiPanelCollapsed;
+
+  useAIChatElement({
+    containerRef: chatContainerRef,
+    selector: 'ai-chat-content',
+    enabled: showAIPanel && !!runtime,
+    createElement: () => document.createElement('ai-chat-content'),
+    configureElement: (el: any) => {
+      el.runtime = runtime;
+      el.runtimeSnapshot = snapshot;
+      el.workspaceId = 'story-workspace';
+    },
+  });
 
   const handleFocusToggle = useCallback(() => {
     setFocusMode(prev => !prev);
   }, []);
 
-  // Direct callback — opens AI chat panel and sends a message
   const openChatWithPrompt = useCallback((prompt: string) => {
     setAiPanelCollapsed(false);
-    setTimeout(() => {
-      aiPanelRef.current?.sendMessage(prompt);
-    }, 100);
   }, []);
-
-  // In focus mode, hide both sidebars
-  const showSidebar = !focusMode;
-  const showAIPanel = !focusMode && !aiPanelCollapsed;
 
   return (
     <StoryFrameworkRoot>
@@ -68,10 +91,18 @@ export const StoryLayout = () => {
               theme={THEME}
             />
             {showAIPanel && (
-              <StoryAIPanel
-                ref={aiPanelRef}
-                onToggleCollapse={() => setAiPanelCollapsed(prev => !prev)}
-                theme={THEME}
+              <div
+                ref={chatContainerRef}
+                style={{
+                  width: 380,
+                  minWidth: 380,
+                  maxWidth: 380,
+                  background: THEME.panel,
+                  borderLeft: `1px solid ${THEME.border}`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                }}
               />
             )}
             {!focusMode && aiPanelCollapsed && (
