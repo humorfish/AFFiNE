@@ -1,4 +1,5 @@
-import '@affine/core/bootstrap/electron';
+// Story setup — minimal bootstrap (env + theme, skip full electron bootstrap)
+import '@affine/core/bootstrap/env';
 import '@affine/core/bootstrap/cleanup';
 import '@affine/component/theme';
 import './global.css';

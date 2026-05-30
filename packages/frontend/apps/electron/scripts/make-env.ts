@@ -17,7 +17,7 @@ const ROOT = path.resolve(__dirname, '..');
 const envBuildType = (process.env.BUILD_TYPE || 'canary').trim().toLowerCase();
 const buildType = ReleaseTypeSchema.parse(envBuildType);
 const stableBuild = buildType === 'stable';
-const productName = !stableBuild ? `AFFiNE-${buildType}` : 'AFFiNE';
+const productName = !stableBuild ? `Story-${buildType}` : 'Story';
 const icoPath = path.join(
   ROOT,
   !stableBuild
@@ -70,10 +70,10 @@ const {
 log(`parsed args: arch=${arch}, platform=${platform}`);
 
 const appIdMap = {
-  internal: 'pro.affine.internal',
-  canary: 'pro.affine.canary',
-  beta: 'pro.affine.beta',
-  stable: 'pro.affine.app',
+  internal: 'com.story-app.internal',
+  canary: 'com.story-app.canary',
+  beta: 'com.story-app.beta',
+  stable: 'com.story-app.desktop',
 };
 
 export {

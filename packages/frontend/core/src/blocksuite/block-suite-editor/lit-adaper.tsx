@@ -14,6 +14,7 @@ import {
 import { getViewManager } from '@affine/core/blocksuite/manager/view';
 import { useEnableAI } from '@affine/core/components/hooks/affine/use-enable-ai';
 import { ServerService } from '@affine/core/modules/cloud';
+import { PeekViewService } from '@affine/core/modules/peek-view';
 import type { DocCustomPropertyInfo } from '@affine/core/modules/db';
 import type {
   DatabaseRow,
@@ -93,34 +94,42 @@ const usePatchSpecs = (mode: DocMode, shared?: boolean) => {
     isCloud && serverConfig.features.includes(ServerFeature.Comment) && !shared;
 
   const patchedSpecs = useMemo(() => {
-    const manager = getViewManager()
+    // If framework can't resolve PeekViewService, skip framework-dependent extensions
+    let hasFullFramework = true;
+    try {
+      framework.get(PeekViewService);
+    } catch {
+      hasFullFramework = false;
+    }
+    const fw = hasFullFramework ? framework : undefined;
+
+    let config = getViewManager()
       .config.init()
-      .foundation(framework)
-      .ai(enableAI, framework)
-      .theme(framework)
-      .editorConfig(framework)
-      .editorView({
-        framework,
-        reactToLit,
-        confirmModal,
-      })
-      .cloud(framework, isCloud)
+      .foundation(fw)
+      .ai(enableAI, fw)
+      .theme(fw)
+      .editorConfig(fw);
+
+    // These require a real FrameworkProvider (Zod validation), skip if unavailable
+    if (hasFullFramework) {
+      config = config
+        .editorView({ framework: fw, reactToLit, confirmModal })
+        .edgelessBlockHeader({ framework: fw, isInPeekView, reactToLit });
+    }
+
+    const manager = config
+      .cloud(fw, isCloud)
       .turboRenderer(enableTurboRenderer)
       .pdf(enablePDFEmbedPreview, reactToLit)
-      .edgelessBlockHeader({
-        framework,
-        isInPeekView,
-        reactToLit,
-      })
-      .database(framework)
-      .linkedDoc(framework)
+      .database(fw)
+      .linkedDoc(fw)
       .paragraph(enableAI)
-      .mobile(framework)
-      .electron(framework)
-      .linkPreview(framework)
-      .codeBlockPreview(framework)
-      .iconPicker(framework)
-      .comment(enableComment, framework).value;
+      .mobile(fw)
+      .electron(fw)
+      .linkPreview(fw)
+      .codeBlockPreview(fw)
+      .iconPicker(fw)
+      .comment(enableComment, fw).value;
 
     if (BUILD_CONFIG.isMobileEdition) {
       if (mode === 'page') {

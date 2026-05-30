@@ -123,9 +123,6 @@
     { "path": "./blocksuite/framework/sync" },
     { "path": "./blocksuite/integration-test" },
     { "path": "./blocksuite/playground" },
-    // TODO(story): removed backend references
-    // { "path": "./packages/backend/native" },
-    // { "path": "./packages/backend/server" },
     { "path": "./packages/common/debug" },
     { "path": "./packages/common/env" },
     { "path": "./packages/common/error" },
@@ -154,9 +151,6 @@
     { "path": "./packages/frontend/routes" },
     { "path": "./packages/frontend/story" },
     { "path": "./packages/frontend/track" },
-    // TODO(story): removed cloud test references
-    // { "path": "./tests/affine-cloud" },
-    // { "path": "./tests/affine-cloud-copilot" },
     { "path": "./tests/affine-desktop" },
     { "path": "./tests/affine-desktop-cloud" },
     { "path": "./tests/affine-local" },

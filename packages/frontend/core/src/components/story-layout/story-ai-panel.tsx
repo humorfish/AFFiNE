@@ -1,6 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { APIKeyStore, LLMClient } from '@affine/ai';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
+import { LLMClient, APIKeyStore } from '@affine/ai';
+
 import { useStory } from './story-context';
+
+export interface StoryAIHandle {
+  sendMessage: (message: string) => void;
+}
 
 interface StoryAIPanelProps {
   onToggleCollapse: () => void;
@@ -25,10 +37,8 @@ const actions = [
   { id: 'analyze', label: '分析', prompt: '请从写作技巧、人物塑造和情节发展三个方面分析以下文本：\n\n' },
 ] as const;
 
-export const StoryAIPanel = ({
-  onToggleCollapse,
-  theme,
-}: StoryAIPanelProps) => {
+export const StoryAIPanel = forwardRef<StoryAIHandle, StoryAIPanelProps>(
+  function StoryAIPanel({ onToggleCollapse, theme }, ref) {
   const { chapters, activeChapterIndex } = useStory();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -36,7 +46,6 @@ export const StoryAIPanel = ({
   const [streaming, setStreaming] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   // Read LLM config from store
   const config = (() => {
@@ -109,6 +118,8 @@ export const StoryAIPanel = ({
     },
     [config, streaming]
   );
+
+  useImperativeHandle(ref, () => ({ sendMessage }), [sendMessage]);
 
   const handleSend = useCallback(() => {
     const text = inputValue.trim();
@@ -278,6 +289,9 @@ export const StoryAIPanel = ({
                 &#128172;
               </div>
               <div>输入消息或使用快捷按钮开始对话</div>
+              <div style={{ fontSize: '11px', marginTop: '6px', opacity: 0.7 }}>
+                选中编辑器文字可使用工具栏 AI 操作
+              </div>
             </div>
           </div>
         ) : (
@@ -352,7 +366,6 @@ export const StoryAIPanel = ({
           }}
         >
           <input
-            ref={inputRef}
             type="text"
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
@@ -396,4 +409,5 @@ export const StoryAIPanel = ({
       </div>
     </div>
   );
-};
+}
+);

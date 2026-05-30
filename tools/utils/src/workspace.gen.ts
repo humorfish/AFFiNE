@@ -1099,23 +1099,6 @@ export const PackageList = [
     workspaceDependencies: [],
   },
   {
-    location: 'packages/backend/native',
-    name: '@affine/server-native',
-    workspaceDependencies: [],
-  },
-  {
-    location: 'packages/backend/server',
-    name: '@affine/server',
-    workspaceDependencies: [
-      'packages/common/s3-compat',
-      'packages/backend/native',
-      'tools/cli',
-      'tools/utils',
-      'packages/common/graphql',
-      'packages/common/realtime',
-    ],
-  },
-  {
     location: 'packages/common/debug',
     name: '@affine/debug',
     workspaceDependencies: [],
@@ -1292,15 +1275,18 @@ export const PackageList = [
     location: 'packages/frontend/core',
     name: '@affine/core',
     workspaceDependencies: [
+      'packages/frontend/ai',
       'packages/frontend/component',
       'packages/common/debug',
       'packages/frontend/electron-api',
       'packages/common/env',
       'packages/common/error',
+      'packages/frontend/git',
       'packages/common/graphql',
       'packages/frontend/i18n',
       'packages/common/nbstore',
       'packages/common/reader',
+      'packages/frontend/story',
       'packages/frontend/templates',
       'packages/frontend/track',
       'blocksuite/affine/all',
@@ -1362,16 +1348,6 @@ export const PackageList = [
     location: 'packages/frontend/track',
     name: '@affine/track',
     workspaceDependencies: ['packages/common/debug'],
-  },
-  {
-    location: 'tests/affine-cloud',
-    name: '@affine-test/affine-cloud',
-    workspaceDependencies: ['tests/kit'],
-  },
-  {
-    location: 'tests/affine-cloud-copilot',
-    name: '@affine-test/affine-cloud-copilot',
-    workspaceDependencies: ['tests/kit'],
   },
   {
     location: 'tests/affine-desktop',
@@ -1539,8 +1515,6 @@ export type PackageName =
   | '@blocksuite/integration-test'
   | '@blocksuite/playground'
   | '@affine/docs'
-  | '@affine/server-native'
-  | '@affine/server'
   | '@affine/debug'
   | '@affine/env'
   | '@affine/error'
@@ -1570,8 +1544,6 @@ export type PackageName =
   | '@affine/story'
   | '@affine/templates'
   | '@affine/track'
-  | '@affine-test/affine-cloud'
-  | '@affine-test/affine-cloud-copilot'
   | '@affine-test/affine-desktop'
   | '@affine-test/affine-desktop-cloud'
   | '@affine-test/affine-local'

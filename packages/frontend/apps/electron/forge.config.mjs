@@ -170,7 +170,7 @@ const makers = [
       config: {
         format: 'ULMO',
         icon: icnsPath,
-        name: 'AFFiNE',
+        name: 'Story',
         'icon-size': 128,
         background: path.join(
           __dirname,
@@ -204,7 +204,7 @@ const makers = [
   {
     name: '@electron-forge/maker-zip',
     config: {
-      name: 'affine',
+      name: 'story',
       iconUrl: icoPath,
       setupIcon: icoPath,
       platforms: ['darwin', 'linux', 'win32'],
@@ -216,7 +216,7 @@ const makers = [
       name: productName,
       setupIcon: icoPath,
       iconUrl: iconUrl,
-      loadingGif: './resources/icons/affine_installing.gif',
+      loadingGif: './resources/icons/story_installing.gif',
     },
   },
   !process.env.SKIP_BUNDLE && {
@@ -280,8 +280,8 @@ const makers = [
         baseVersion: '25.08',
         files: [
           [
-            './resources/affine.metainfo.xml',
-            '/usr/share/metainfo/affine.metainfo.xml',
+            './resources/story.metainfo.xml',
+            '/usr/share/metainfo/story.metainfo.xml',
           ],
         ],
         modules: [
@@ -344,7 +344,7 @@ export default {
     // We need the following line for updater
     extraResource: [
       './resources/app-update.yml',
-      ...(platform === 'linux' ? ['./resources/affine.metainfo.xml'] : []),
+      ...(platform === 'linux' ? ['./resources/story.metainfo.xml'] : []),
     ],
     protocols: [
       {
@@ -377,7 +377,7 @@ export default {
     asar: true,
     extendInfo: {
       NSAudioCaptureUsageDescription:
-        'Please allow access in order to capture audio from other apps by AFFiNE.',
+        'Please allow access in order to capture audio from other apps by Story.',
     },
   },
   makers,

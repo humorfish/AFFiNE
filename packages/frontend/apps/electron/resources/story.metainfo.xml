@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<component type="desktop-application">
+  <id>story</id>
+  <name>Story</name>
+  <summary>Novel writing tool with AI assistance</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <url type="homepage">https://github.com/story</url>
+  <developer id="com.story-app.desktop">
+    <name>Story</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <categories>
+    <category>Office</category>
+    <category>WordProcessor</category>
+  </categories>
+  <keywords>
+    <keyword>novel</keyword>
+    <keyword>writing</keyword>
+    <keyword>creative</keyword>
+  </keywords>
+  <branding>
+    <color type="primary">#1e96eb</color>
+  </branding>
+  <recommends>
+    <display_length compare="ge">800</display_length>
+  </recommends>
+  <provides>
+    <mediatype>x-scheme-handler/story</mediatype>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>tablet</control>
+    <control>touch</control>
+  </supports>
+  <description>
+    <p>Story is a novel writing tool powered by AI, designed for creative writers.</p>
+    <p>Features</p>
+    <ul>
+      <li>Chapter management with Git-based version control</li>
+      <li>AI-assisted continuation writing and creative sparks</li>
+      <li>World-building, character relationship graphs, and story roadmaps</li>
+      <li>Voice recording with Whisper transcription and AI organization</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">story.desktop</launchable>
+</component>

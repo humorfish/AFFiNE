@@ -9,6 +9,7 @@ set -euo pipefail
 #   --platform NAME   Target platform: darwin (default), linux, win32
 #   --arch NAME       Target arch: x64 (default), arm64
 #   --package-only    Only run packaging (assumes build is done)
+#   --clean           Remove old build output before starting
 
 APP_NAME="Story"
 BUILD_TYPE="${BUILD_TYPE:-canary}"
@@ -29,6 +30,7 @@ SKIP_NATIVE=false
 SKIP_WEB=false
 SKIP_INSTALL=false
 PACKAGE_ONLY=false
+CLEAN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,9 +40,10 @@ while [[ $# -gt 0 ]]; do
     --package-only) PACKAGE_ONLY=true; shift ;;
     --platform) PLATFORM="$2"; shift 2 ;;
     --arch) ARCH="$2"; shift 2 ;;
+    --clean) CLEAN=true; shift ;;
     --help)
       echo "Usage: $0 [--skip-native] [--skip-web] [--skip-install] [--package-only]"
-      echo "           [--platform darwin|linux|win32] [--arch x64|arm64]"
+      echo "           [--platform darwin|linux|win32] [--arch x64|arm64] [--clean]"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -55,7 +58,19 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ELECTRON_DIR="packages/frontend/apps/electron"
 cd "$PROJECT_ROOT"
 
+START_TIME=$(date +%s)
+
 log "Building $APP_NAME Desktop ($BUILD_TYPE) for $PLATFORM/$ARCH"
+
+# ─── Save original .yarnrc.yml nmMode so we can restore on exit ───
+YARNRC=".yarnrc.yml"
+ORIG_NM_MODE=$(grep '^nmMode:' "$YARNRC" 2>/dev/null | awk '{print $2}' || echo "hardlinks-local")
+ORIGN_NM_HOIST=$(grep '^nmHoistingLimits:' "$YARNRC" 2>/dev/null | awk '{print $2}' || echo "none")
+restore_yarnrc() {
+  yarn config set nmMode "$ORIG_NM_MODE" 2>/dev/null || true
+  yarn config set nmHoistingLimits "$ORIGN_NM_HOIST" 2>/dev/null || true
+}
+trap restore_yarnrc EXIT
 
 # ─── Check prerequisites ───
 if ! command -v git &>/dev/null; then
@@ -63,22 +78,29 @@ if ! command -v git &>/dev/null; then
 fi
 log "git found: $(git --version)"
 
+# ─── Clean old output ───
+if [ "$CLEAN" = true ]; then
+  log "Cleaning old build output"
+  rm -rf "$ELECTRON_DIR/out"
+  rm -rf "$ELECTRON_DIR/resources/web-static"
+fi
+
 # ─── Package only ───
 if [ "$PACKAGE_ONLY" = true ]; then
-  log "Package-only mode"
+  log "Package-only mode (skipping build phases)"
   BUILD_TYPE="$BUILD_TYPE" SKIP_WEB_BUILD=1 HOIST_NODE_MODULES=1 \
     yarn affine "@affine/electron" make "--platform=$PLATFORM" "--arch=$ARCH"
-  log "Done!"
+  ELAPSED=$(( $(date +%s) - START_TIME ))
+  log "Done! (${ELAPSED}s)"
   exit 0
 fi
 
-# ─── Phase 1: Install dependencies (default config) ───
-yarn config set nmMode hardlinks-local 2>/dev/null || true
-yarn config set nmHoistingLimits none 2>/dev/null || true
-
+# ─── Phase 1: Install dependencies ───
 if [ "$SKIP_INSTALL" = false ]; then
   if [ ! -d "node_modules" ]; then
     log "Phase 1: Installing dependencies"
+    yarn config set nmMode hardlinks-local 2>/dev/null || true
+    yarn config set nmHoistingLimits none 2>/dev/null || true
     yarn install
   else
     log "Phase 1: node_modules exists, skipping full install"
@@ -95,21 +117,10 @@ else
   warn "Phase 2: Skipping native build"
 fi
 
-# ─── Phase 3: Create electron-specific node_modules ───
-log "Phase 3: Setting up electron node_modules (workspaces focus)"
-
-rm -rf "$ELECTRON_DIR/node_modules"
-
-yarn config set nmMode classic 2>/dev/null || true
-yarn config set nmHoistingLimits workspaces 2>/dev/null || true
-
+# ─── Phase 3: Prepare electron environment ───
+log "Phase 3: Preparing electron environment"
 mkdir -p "$ELECTRON_DIR/node_modules"
-ln -s "$PROJECT_ROOT/node_modules/electron" "$ELECTRON_DIR/node_modules/electron"
-
-yarn workspaces focus "@affine/electron" "@affine/monorepo" "@affine/nbstore" "@toeverything/infra"
-
-yarn config set nmMode hardlinks-local 2>/dev/null || true
-yarn config set nmHoistingLimits none 2>/dev/null || true
+ln -sf "$PROJECT_ROOT/node_modules/electron" "$ELECTRON_DIR/node_modules/electron"
 
 # ─── Phase 4: Build web + electron layers ───
 log "Phase 4: Building web assets and electron layers (production)"
@@ -120,7 +131,7 @@ else
   NODE_ENV=production BUILD_TYPE="$BUILD_TYPE" yarn affine "@affine/electron" build
 fi
 
-# ─── Phase 5: Package / Make ───
+# ─── Phase 5: Package ───
 log "Phase 5: Packaging $APP_NAME desktop app ($PLATFORM/$ARCH)"
 if [ "$PLATFORM" = "win32" ]; then
   BUILD_TYPE="$BUILD_TYPE" SKIP_WEB_BUILD=1 HOIST_NODE_MODULES=1 \
@@ -131,15 +142,21 @@ else
 fi
 
 # ─── Done ───
+ELAPSED=$(( $(date +%s) - START_TIME ))
 OUT_DIR="$ELECTRON_DIR/out/$BUILD_TYPE"
-log "Build complete!"
+log "Build complete! (${ELAPSED}s)"
 log "Output: $OUT_DIR/"
 
 if [ "$PLATFORM" = "darwin" ]; then
   APP_PATH="$OUT_DIR/$APP_NAME-${BUILD_TYPE}-darwin-${ARCH}/$APP_NAME-${BUILD_TYPE}.app"
   DMG_PATH=$(find "$OUT_DIR/make" -name "*.dmg" 2>/dev/null | head -1)
-  [ -d "$APP_PATH" ] && log "App:    $APP_PATH"
-  [ -n "$DMG_PATH" ] && [ -f "$DMG_PATH" ] && log "DMG:    $DMG_PATH"
+  ZIP_PATH=$(find "$OUT_DIR/make" -name "*.zip" 2>/dev/null | head -1)
+  [ -d "$APP_PATH" ] && log "  App: $APP_PATH"
+  [ -n "$DMG_PATH" ] && [ -f "$DMG_PATH" ] && log "  DMG: $DMG_PATH"
+  [ -n "$ZIP_PATH" ] && [ -f "$ZIP_PATH" ] && log "  ZIP: $ZIP_PATH"
+elif [ "$PLATFORM" = "win32" ]; then
+  EXE_PATH=$(find "$OUT_DIR/make" -name "*.exe" 2>/dev/null | head -1)
+  [ -n "$EXE_PATH" ] && [ -f "$EXE_PATH" ] && log "  EXE: $EXE_PATH"
 fi
 
 log ""

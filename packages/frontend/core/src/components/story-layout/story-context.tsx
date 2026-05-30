@@ -3,6 +3,7 @@ import React, {
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from 'react';
@@ -10,6 +11,8 @@ import { Schema, Text } from '@blocksuite/affine/store';
 import type { Store } from '@blocksuite/affine/store';
 import { TestWorkspace } from '@blocksuite/affine/store/test';
 import { AffineSchemas } from '@blocksuite/affine/schemas';
+import { getInternalStoreExtensions } from '@blocksuite/affine/extensions/store';
+import { StoreExtensionManager } from '@blocksuite/affine/ext-loader';
 import { NoopDocSource, MemoryBlobSource } from '@blocksuite/affine/sync';
 
 export interface ChapterMeta {
@@ -61,25 +64,57 @@ type StoryContextValue = StoryState & StoryActions;
 
 const StoryContext = createContext<StoryContextValue | null>(null);
 
+// Persistence keys
+const STORAGE_KEYS = {
+  activeProjectId: 'story-active-project-id',
+  activeChapterIndex: 'story-active-chapter-index',
+  projectMeta: 'story-project-meta',
+  chaptersData: 'story-chapters-data',
+};
+
+function loadFromStorage<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveToStorage(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch { /* ignore quota errors */ }
+}
+
 // BlockSuite workspace singleton for Story
 const bsSchema = new Schema();
 bsSchema.register(AffineSchemas);
+
+const bsStoreManager = new StoreExtensionManager(getInternalStoreExtensions());
 
 const bsWorkspace = new TestWorkspace({
   id: 'story-editor',
   docSources: { main: new NoopDocSource() },
   blobSources: { main: new MemoryBlobSource() },
 });
+bsWorkspace.storeExtensions = bsStoreManager.get('store');
 bsWorkspace.meta.initialize();
 
 function createChapterStore(chapterId: string): Store {
-  const doc = bsWorkspace.createDoc(`chapter:${chapterId}`);
+  const docId = `chapter:${chapterId}`;
+  let doc = bsWorkspace.getDoc(docId);
+  if (!doc) {
+    doc = bsWorkspace.createDoc(docId);
+  }
   doc.load();
   const store = doc.getStore();
-  const rootId = store.addBlock('affine:page', { title: new Text('') });
-  store.addBlock('affine:surface', {}, rootId);
-  const noteId = store.addBlock('affine:note', {}, rootId);
-  store.addBlock('affine:paragraph', {}, noteId);
+  if (!store.root) {
+    const rootId = store.addBlock('affine:page', { title: new Text('') });
+    store.addBlock('affine:surface', {}, rootId);
+    const noteId = store.addBlock('affine:note', {}, rootId);
+    store.addBlock('affine:paragraph', {}, noteId);
+  }
   return store;
 }
 
@@ -90,12 +125,31 @@ export function useStory(): StoryContextValue {
 }
 
 export function StoryProvider({ children }: { children: ReactNode }) {
-  const [project, setProject] = useState<NovelProject | null>(null);
-  const [chapters, setChapters] = useState<ChapterContent[]>([]);
-  const [activeChapterIndex, setActiveChapterIndex] = useState<number | null>(null);
+  const [project, setProject] = useState<NovelProject | null>(
+    () => loadFromStorage<NovelProject>(STORAGE_KEYS.projectMeta)
+  );
+  const [chapters, setChapters] = useState<ChapterContent[]>(
+    () => loadFromStorage<ChapterContent[]>(STORAGE_KEYS.chaptersData) ?? []
+  );
+  const [activeChapterIndex, setActiveChapterIndex] = useState<number | null>(
+    () => loadFromStorage<number>(STORAGE_KEYS.activeChapterIndex)
+  );
   const [activeModule, setActiveModule] = useState('chapters');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Persist project and chapters to localStorage on change
+  useEffect(() => {
+    if (project) {
+      saveToStorage(STORAGE_KEYS.projectMeta, project);
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.projectMeta);
+    }
+  }, [project]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.chaptersData, chapters);
+  }, [chapters]);
 
   const chapterStores = React.useMemo(() => new Map<number, Store>(), []);
 
@@ -137,6 +191,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         setProject(newProject);
         setChapters([]);
         setActiveChapterIndex(null);
+        saveToStorage(STORAGE_KEYS.activeProjectId, id);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -162,6 +217,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         };
         setChapters(prev => [...prev, newChapter]);
         setActiveChapterIndex(index);
+        saveToStorage(STORAGE_KEYS.activeChapterIndex, index);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -173,6 +229,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
 
   const selectChapter = useCallback(async (index: number) => {
     setActiveChapterIndex(index);
+    saveToStorage(STORAGE_KEYS.activeChapterIndex, index);
   }, []);
 
   const updateChapterContent = useCallback(
@@ -213,6 +270,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         setChapters(prev => prev.filter(ch => ch.meta.index !== index));
         if (activeChapterIndex === index) {
           setActiveChapterIndex(null);
+          saveToStorage(STORAGE_KEYS.activeChapterIndex, null);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));

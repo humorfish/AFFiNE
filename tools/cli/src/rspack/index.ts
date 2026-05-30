@@ -152,8 +152,13 @@ export function createHTMLTargetConfig(
       },
       extensions: ['.js', '.ts', '.tsx'],
       alias: {
+        'react': ProjectRoot.join('node_modules', 'react').value,
+        'react-dom': ProjectRoot.join('node_modules', 'react-dom').value,
+        'react/jsx-runtime': ProjectRoot.join('node_modules', 'react', 'jsx-runtime.js').value,
+        'react-dom/client': ProjectRoot.join('node_modules', 'react-dom', 'client.js').value,
         yjs: ProjectRoot.join('node_modules', 'yjs').value,
         lit: ProjectRoot.join('node_modules', 'lit').value,
+        '@lottiefiles/dotlottie-wc': ProjectRoot.join('packages', 'frontend', 'core', 'node_modules', '@lottiefiles', 'dotlottie-wc').value,
         '@preact/signals-core': ProjectRoot.join(
           'node_modules',
           '@preact',

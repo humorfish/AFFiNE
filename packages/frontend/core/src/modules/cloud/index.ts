@@ -109,7 +109,7 @@ export class Server extends Entity<{ serverMetadata: ServerMetadata }> {
   readonly id = this.props.serverMetadata.id;
   readonly baseUrl = this.props.serverMetadata.baseUrl;
   readonly serverMetadata = this.props.serverMetadata;
-  readonly config$ = new LiveData<ServerConfig | null>(null);
+  readonly config$ = new LiveData<ServerConfig | null>({});
   readonly features$ = new LiveData<Record<string, boolean>>({});
   readonly scope: ServerScope;
   readonly serverConfigStore = {
@@ -124,6 +124,10 @@ export class Server extends Entity<{ serverMetadata: ServerMetadata }> {
 
   gql(..._args: any[]): Promise<any> {
     return Promise.resolve(null);
+  }
+
+  waitForConfigRevalidation(_signal?: AbortSignal): Promise<void> {
+    return Promise.resolve();
   }
 }
 
@@ -179,8 +183,12 @@ export class ServerService extends Service {
 
 export class ServersService extends Service {
   servers$ = new LiveData<Server[]>([]);
-  serverByBaseUrl$ = new LiveData<Server | null>(null);
-  server$ = new LiveData<Server | null>(null);
+  serverByBaseUrl$(_url: string): LiveData<Server | null> {
+    return new LiveData<Server | null>(null);
+  }
+  server$(_flavour: string): LiveData<Server | null> {
+    return new LiveData<Server | null>(null);
+  }
   addOrGetServerByBaseUrl(_url: string): Server {
     return null as unknown as Server;
   }
@@ -219,8 +227,16 @@ export class CaptchaService extends Service {
 }
 
 export class DefaultServerService extends Service {
-  server: Server | null = null;
-  server$ = new LiveData<Server | null>(null);
+  readonly server: Server;
+  readonly server$ = new LiveData<Server | null>(null);
+
+  constructor() {
+    super();
+    this.server = new Server({
+      serverMetadata: { id: 'local', baseUrl: 'http://localhost' },
+    });
+    this.server$.next(this.server);
+  }
 }
 
 export class DocCreatedByUpdatedBySyncService extends Service {}
@@ -297,6 +313,22 @@ export class RealtimeLiveQuery {
 }
 
 // ---- Stub function ----
-export function configureCloudModule(_framework: Framework): void {
-  // TODO(story): cloud module disabled - no-op
+export function configureCloudModule(framework: Framework): void {
+  // TODO(story): cloud module disabled - register stubs so DI resolves
+  framework
+    .service(ServersService)
+    .service(DefaultServerService)
+    .service(AuthService)
+    .service(ServerService)
+    .service(GraphQLService)
+    .service(FetchService)
+    .service(CaptchaService)
+    .service(SubscriptionService)
+    .service(PublicUserService)
+    .service(WorkspaceServerService)
+    .service(InvitationService)
+    .service(InvoicesService)
+    .service(RealtimeService)
+    .service(EventSourceService)
+    .service(AccessTokenService);
 }
