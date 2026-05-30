@@ -27,6 +27,44 @@ const THEME = {
   border: 'var(--affine-border-color)',
 };
 
+// Minimal signal stub for BlockSuite components
+const stubSignal = (v: any = undefined) => ({
+  value: v,
+  peek: () => v,
+  subscribe: () => () => {},
+});
+
+// Service stubs for AIChatContent — satisfies required property contracts
+// without pulling in the full AFFiNE cloud service layer
+const aiServiceStubs = {
+  subscriptionService: {
+    subscription: { revalidate: () => {} },
+  },
+  reasoningConfig: {
+    enabled: stubSignal(false),
+    setEnabled: () => {},
+  },
+  searchMenuConfig: {
+    enabled: stubSignal(false),
+    setSearchMenuEnabled: () => {},
+  },
+  docDisplayConfig: {
+    getTags: () => [],
+    getLinkedDocs: () => [],
+  },
+  serverService: { server: {} },
+  affineFeatureFlagService: { flags: {} },
+  affineWorkspaceDialogService: {},
+  affineThemeService: { theme$: stubSignal('dark') },
+  notificationService: { toast: () => {} },
+  aiDraftService: undefined,
+  aiToolsConfigService: { getToolsConfig: () => ({}) },
+  aiModelService: { models: [], getCurrentModel: () => 'default' },
+  peekViewService: {},
+  onAISubscribe: async () => {},
+  onOpenDoc: () => {},
+};
+
 export const StoryLayout = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [aiPanelCollapsed, setAiPanelCollapsed] = useState(true);
@@ -59,6 +97,7 @@ export const StoryLayout = () => {
       el.runtime = runtime;
       el.runtimeSnapshot = snapshot;
       el.workspaceId = 'story-workspace';
+      Object.assign(el, aiServiceStubs);
     },
   });
 
