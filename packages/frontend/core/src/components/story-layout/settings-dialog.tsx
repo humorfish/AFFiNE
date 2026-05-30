@@ -1,9 +1,8 @@
 import { useCallback } from 'react';
 
-import { useWorkspace } from './workspace-provider';
 import { Modal } from './modal';
-import { LLMSettingsSection } from './settings-page';
-import { GitSettingsSection } from './settings-page';
+import { GitSettingsSection, LLMSettingsSection } from './settings-page';
+import { useWorkspace } from './workspace-provider';
 
 interface SettingsDialogProps {
   open: boolean;

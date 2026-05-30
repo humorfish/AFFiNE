@@ -14,7 +14,6 @@ import {
 import { getViewManager } from '@affine/core/blocksuite/manager/view';
 import { useEnableAI } from '@affine/core/components/hooks/affine/use-enable-ai';
 import { ServerService } from '@affine/core/modules/cloud';
-import { PeekViewService } from '@affine/core/modules/peek-view';
 import type { DocCustomPropertyInfo } from '@affine/core/modules/db';
 import type {
   DatabaseRow,
@@ -23,7 +22,10 @@ import type {
 import { EditorSettingService } from '@affine/core/modules/editor-setting';
 import { FeatureFlagService } from '@affine/core/modules/feature-flag';
 import { JournalService } from '@affine/core/modules/journal';
-import { useInsidePeekView } from '@affine/core/modules/peek-view';
+import {
+  PeekViewService,
+  useInsidePeekView,
+} from '@affine/core/modules/peek-view';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import { ServerFeature } from '@affine/graphql';
 import track from '@affine/track';

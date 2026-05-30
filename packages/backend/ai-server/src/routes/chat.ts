@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import type { SessionStore } from '../services/session-store';
+
 import type { StoryQueryEngine } from '../services/query-engine';
+import type { SessionStore } from '../services/session-store';
 
 export function createChatRouter(
   sessionStore: SessionStore,
@@ -12,12 +13,24 @@ export function createChatRouter(
   router.post('/', async c => {
     const body = (await c.req.json()) as {
       sessionId?: string;
+      input?: string;
       messages?: Array<{ role: string; content: string }>;
       context?: Record<string, unknown>;
     };
 
-    if (!body.sessionId || !body.messages?.length) {
-      return c.json({ error: 'sessionId and messages are required' }, 400);
+    if (!body.sessionId) {
+      return c.json({ error: 'sessionId is required' }, 400);
+    }
+
+    // Accept either messages array or input string
+    const messages = body.messages?.length
+      ? body.messages
+      : body.input
+        ? [{ role: 'user', content: body.input }]
+        : null;
+
+    if (!messages) {
+      return c.json({ error: 'messages or input is required' }, 400);
     }
 
     const session = sessionStore.get(body.sessionId);
@@ -26,7 +39,7 @@ export function createChatRouter(
     }
 
     // Store user messages
-    for (const msg of body.messages) {
+    for (const msg of messages) {
       sessionStore.addMessage(body.sessionId, msg);
     }
 

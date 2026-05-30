@@ -14,9 +14,10 @@ export interface Session {
 export class SessionStore {
   private readonly sessions = new Map<string, Session>();
 
-  create(title?: string): Session {
+  create(title?: string, id?: string): Session {
+    const sessionId = id ?? crypto.randomUUID();
     const session: Session = {
-      id: crypto.randomUUID(),
+      id: sessionId,
       createdAt: new Date().toISOString(),
       title: title ?? 'New Chat',
       messages: [],

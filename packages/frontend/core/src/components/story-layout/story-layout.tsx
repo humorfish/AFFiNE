@@ -1,21 +1,21 @@
+/* eslint-disable rxjs/finnish */
+import './story-layout.css';
+
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { AIChatRuntime } from '../../blocksuite/ai/runtime/chat/runtime';
 import { WorkspaceAIChatSessionStrategy } from '../../blocksuite/ai/runtime/chat/session-strategy';
-import { useAIChatRuntime } from '../../blocksuite/ai/runtime/chat/use-runtime';
 import { useAIChatElement } from '../../blocksuite/ai/runtime/chat/use-element';
+import { useAIChatRuntime } from '../../blocksuite/ai/runtime/chat/use-runtime';
 import { getStoryAIRequestService } from './ai/setup';
-
-import './story-layout.css';
-
 import { ChaptersDialog } from './chapters-dialog';
-import { StoryFrameworkRoot } from './story-framework';
-import { StoryProvider } from './story-context';
-import { StoryEditorPanel } from './story-editor-panel';
-import { StorySidebar, NAV_ITEMS } from './story-sidebar';
 import { NewProjectDialog } from './new-project-dialog';
 import { PlaceholderDialog } from './placeholder-dialog';
 import { SettingsDialog } from './settings-dialog';
+import { StoryProvider } from './story-context';
+import { StoryEditorPanel } from './story-editor-panel';
+import { StoryFrameworkRoot } from './story-framework';
+import { NAV_ITEMS, StorySidebar } from './story-sidebar';
 import { WorkspaceProvider } from './workspace-provider';
 
 const THEME = {
@@ -28,7 +28,7 @@ const THEME = {
 };
 
 // Minimal signal stub for BlockSuite components
-const stubSignal = (v: any = undefined) => ({
+const stubSignal = (v?: any) => ({
   value: v,
   peek: () => v,
   subscribe: () => () => {},
@@ -60,9 +60,14 @@ const aiServiceStubs = {
     getCollectionPageIds: () => [],
   },
   serverService: { server: { config$: stubSignal({ type: 'local' }) } },
-  affineFeatureFlagService: { flags: { enable_send_detailed_object_to_ai: stubSignal(false) } },
+  affineFeatureFlagService: {
+    flags: { enable_send_detailed_object_to_ai: stubSignal(false) },
+  },
   affineWorkspaceDialogService: {},
-  affineThemeService: { theme$: stubSignal('dark') },
+  affineThemeService: {
+    theme$: stubSignal('dark'),
+    appTheme: { themeSignal: stubSignal('dark') },
+  },
   notificationService: { toast: () => {} },
   aiDraftService: undefined,
   aiToolsConfigService: {
@@ -71,7 +76,16 @@ const aiServiceStubs = {
     setConfig: () => {},
   },
   aiModelService: {
-    models: stubSignal([{ id: 'default', name: 'Default', category: 'Default', version: '1.0', isDefault: true, isPro: false }]),
+    models: stubSignal([
+      {
+        id: 'default',
+        name: 'Default',
+        category: 'Default',
+        version: '1.0',
+        isDefault: true,
+        isPro: false,
+      },
+    ]),
     modelId: stubSignal('default'),
     setModel: () => {},
   },
@@ -120,7 +134,7 @@ export const StoryLayout = () => {
     setFocusMode(prev => !prev);
   }, []);
 
-  const openChatWithPrompt = useCallback((prompt: string) => {
+  const openChatWithPrompt = useCallback((_prompt: string) => {
     setAiPanelCollapsed(false);
   }, []);
 
@@ -133,7 +147,7 @@ export const StoryLayout = () => {
               <StorySidebar
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
-                onNavClick={(id) => setActiveModal(id)}
+                onNavClick={id => setActiveModal(id)}
                 onNewProject={() => setActiveModal('new-project')}
                 theme={THEME}
               />
@@ -185,13 +199,17 @@ export const StoryLayout = () => {
             open={activeModal === 'settings'}
             onClose={() => setActiveModal(null)}
           />
-          {activeModal && !['chapters', 'new-project', 'settings'].includes(activeModal) && (
-            <PlaceholderDialog
-              open
-              title={NAV_ITEMS.find(n => n.id === activeModal)?.label ?? activeModal}
-              onClose={() => setActiveModal(null)}
-            />
-          )}
+          {activeModal &&
+            !['chapters', 'new-project', 'settings'].includes(activeModal) && (
+              <PlaceholderDialog
+                open
+                title={
+                  NAV_ITEMS.find(n => n.id === activeModal)?.label ??
+                  activeModal
+                }
+                onClose={() => setActiveModal(null)}
+              />
+            )}
         </StoryProvider>
       </WorkspaceProvider>
     </StoryFrameworkRoot>

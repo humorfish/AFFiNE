@@ -1,13 +1,17 @@
-import type { SessionStore } from '../services/session-store';
 import { Hono } from 'hono';
+
+import type { SessionStore } from '../services/session-store';
 
 export function createSessionRouter(sessionStore: SessionStore): Hono {
   const router = new Hono();
 
   router.post('/', async c => {
     try {
-      const body = (await c.req.json()) as { title?: string };
-      const session = sessionStore.create(body?.title);
+      const body = (await c.req.json()) as {
+        title?: string;
+        sessionId?: string;
+      };
+      const session = sessionStore.create(body?.title, body?.sessionId);
       return c.json(session, 201);
     } catch {
       const session = sessionStore.create();

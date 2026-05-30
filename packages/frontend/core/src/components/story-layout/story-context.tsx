@@ -1,3 +1,10 @@
+import { StoreExtensionManager } from '@blocksuite/affine/ext-loader';
+import { getInternalStoreExtensions } from '@blocksuite/affine/extensions/store';
+import { AffineSchemas } from '@blocksuite/affine/schemas';
+import type { Store } from '@blocksuite/affine/store';
+import { Schema, Text } from '@blocksuite/affine/store';
+import { TestWorkspace } from '@blocksuite/affine/store/test';
+import { MemoryBlobSource, NoopDocSource } from '@blocksuite/affine/sync';
 import React, {
   createContext,
   type ReactNode,
@@ -7,13 +14,6 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import { Schema, Text } from '@blocksuite/affine/store';
-import type { Store } from '@blocksuite/affine/store';
-import { TestWorkspace } from '@blocksuite/affine/store/test';
-import { AffineSchemas } from '@blocksuite/affine/schemas';
-import { getInternalStoreExtensions } from '@blocksuite/affine/extensions/store';
-import { StoreExtensionManager } from '@blocksuite/affine/ext-loader';
-import { NoopDocSource, MemoryBlobSource } from '@blocksuite/affine/sync';
 
 export interface ChapterMeta {
   index: number;
@@ -51,7 +51,15 @@ export interface StoryState {
 }
 
 interface StoryActions {
-  createProject: (input: { title: string; author: string; description: string; wordCountTarget: number }, workspacePath: string) => Promise<void>;
+  createProject: (
+    input: {
+      title: string;
+      author: string;
+      description: string;
+      wordCountTarget: number;
+    },
+    workspacePath: string
+  ) => Promise<void>;
   addChapter: (title: string, content: string) => Promise<void>;
   selectChapter: (index: number) => Promise<void>;
   updateChapterContent: (content: string) => Promise<void>;
@@ -84,7 +92,9 @@ function loadFromStorage<T>(key: string): T | null {
 function saveToStorage(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-  } catch { /* ignore quota errors */ }
+  } catch {
+    /* ignore quota errors */
+  }
 }
 
 // BlockSuite workspace singleton for Story
@@ -125,8 +135,8 @@ export function useStory(): StoryContextValue {
 }
 
 export function StoryProvider({ children }: { children: ReactNode }) {
-  const [project, setProject] = useState<NovelProject | null>(
-    () => loadFromStorage<NovelProject>(STORAGE_KEYS.projectMeta)
+  const [project, setProject] = useState<NovelProject | null>(() =>
+    loadFromStorage<NovelProject>(STORAGE_KEYS.projectMeta)
   );
   const [chapters, setChapters] = useState<ChapterContent[]>(
     () => loadFromStorage<ChapterContent[]>(STORAGE_KEYS.chaptersData) ?? []
@@ -153,22 +163,30 @@ export function StoryProvider({ children }: { children: ReactNode }) {
 
   const chapterStores = React.useMemo(() => new Map<number, Store>(), []);
 
-  const getChapterStore = React.useCallback((chapterIndex: number): Store | null => {
-    const existing = chapterStores.get(chapterIndex);
-    if (existing) return existing;
-    try {
-      const store = createChapterStore(`ch-${chapterIndex}`);
-      chapterStores.set(chapterIndex, store);
-      return store;
-    } catch (err) {
-      console.error('Failed to create BlockSuite chapter store:', err);
-      return null;
-    }
-  }, [chapterStores]);
+  const getChapterStore = React.useCallback(
+    (chapterIndex: number): Store | null => {
+      const existing = chapterStores.get(chapterIndex);
+      if (existing) return existing;
+      try {
+        const store = createChapterStore(`ch-${chapterIndex}`);
+        chapterStores.set(chapterIndex, store);
+        return store;
+      } catch (err) {
+        console.error('Failed to create BlockSuite chapter store:', err);
+        return null;
+      }
+    },
+    [chapterStores]
+  );
 
   const createProject = useCallback(
     async (
-      input: { title: string; author: string; description: string; wordCountTarget: number },
+      input: {
+        title: string;
+        author: string;
+        description: string;
+        wordCountTarget: number;
+      },
       workspacePath: string
     ) => {
       setLoading(true);
@@ -201,7 +219,6 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  
   const addChapter = useCallback(
     async (title: string, content: string) => {
       if (!project) return;
@@ -212,7 +229,13 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         const index = chapters.length + 1;
         const now = new Date().toISOString();
         const newChapter: ChapterContent = {
-          meta: { index, title, wordCount: content.length, createdAt: now, updatedAt: now },
+          meta: {
+            index,
+            title,
+            wordCount: content.length,
+            createdAt: now,
+            updatedAt: now,
+          },
           content,
         };
         setChapters(prev => [...prev, newChapter]);

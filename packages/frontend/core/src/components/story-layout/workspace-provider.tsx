@@ -1,10 +1,10 @@
 import {
   createContext,
+  type ReactNode,
   useCallback,
   useContext,
   useMemo,
   useState,
-  type ReactNode,
 } from 'react';
 
 import { Modal } from './modal';
@@ -21,13 +21,14 @@ const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 export function useWorkspace(): WorkspaceContextValue {
   const ctx = useContext(WorkspaceContext);
-  if (!ctx) throw new Error('useWorkspace must be used within WorkspaceProvider');
+  if (!ctx)
+    throw new Error('useWorkspace must be used within WorkspaceProvider');
   return ctx;
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [workspacePath, setWorkspacePathState] = useState<string | null>(
-    () => localStorage.getItem(STORAGE_KEY)
+  const [workspacePath, setWorkspacePathState] = useState<string | null>(() =>
+    localStorage.getItem(STORAGE_KEY)
   );
 
   const setWorkspacePath = useCallback((path: string) => {
@@ -57,7 +58,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 }
 
-function WorkspacePickerModal({ onSelect }: { onSelect: (path: string) => void }) {
+function WorkspacePickerModal({
+  onSelect,
+}: {
+  onSelect: (path: string) => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [customPath, setCustomPath] = useState('');
 
@@ -83,10 +88,16 @@ function WorkspacePickerModal({ onSelect }: { onSelect: (path: string) => void }
   }, [customPath, onSelect]);
 
   return (
-    <Modal open={true} onClose={() => {}} title="选择工作区" dismissible={false}>
+    <Modal
+      open={true}
+      onClose={() => {}}
+      title="选择工作区"
+      dismissible={false}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ color: '#8888aa', fontSize: 14 }}>
-          欢迎使用 Story！请选择一个目录作为你的工作区，所有项目数据将保存在此目录中。
+          欢迎使用
+          Story！请选择一个目录作为你的工作区，所有项目数据将保存在此目录中。
         </div>
         <button
           onClick={handleBrowse}

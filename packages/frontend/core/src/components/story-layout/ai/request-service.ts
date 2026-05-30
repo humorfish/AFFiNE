@@ -4,11 +4,11 @@
 
 import { Subject } from 'rxjs';
 
+import type { ActionEventType } from '../../../blocksuite/ai/provider';
 import type {
   AIActionId,
   AIActionOptions,
 } from '../../../blocksuite/ai/runtime/request/action-definitions';
-import type { ActionEventType } from '../../../blocksuite/ai/provider';
 
 type CreateSessionOptions = BlockSuitePresets.AICreateSessionOptions;
 

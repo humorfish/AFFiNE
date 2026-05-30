@@ -15,8 +15,8 @@ export function getFeatureFlagSyncer(
       const bsFeatureFlagService = this.store.get(BSFeatureFlagService);
       Object.entries(AFFINE_FLAGS).forEach(([key, flag]) => {
         if (flag.category === 'blocksuite') {
-          const value =
-            featureFlagService.flags[key as keyof AFFINE_FLAGS].value;
+          const flagEntry = featureFlagService.flags[key as keyof AFFINE_FLAGS];
+          const value = flagEntry?.value;
           if (value !== undefined) {
             bsFeatureFlagService.setFlag(flag.bsFlag, value);
           }

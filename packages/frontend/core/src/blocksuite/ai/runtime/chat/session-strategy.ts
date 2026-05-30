@@ -89,7 +89,7 @@ export class DocAIChatSessionStrategy implements AIChatSessionStrategy {
     return request.createSessionWithHistory({
       workspaceId: scope.workspaceId,
       docId: scope.docId,
-      promptName: 'Chat With AFFiNE AI',
+      promptName: 'Chat With Story AI',
       reuseLatestChat: false,
       pinned: options.pinned,
     });
@@ -145,7 +145,7 @@ export class WorkspaceAIChatSessionStrategy implements AIChatSessionStrategy {
   ) {
     return request.createSessionWithHistory({
       workspaceId: scope.workspaceId,
-      promptName: 'Chat With AFFiNE AI',
+      promptName: 'Chat With Story AI',
       reuseLatestChat: false,
       pinned: options.pinned,
     });
@@ -193,7 +193,7 @@ export class ForkAIChatSessionStrategy implements AIChatSessionStrategy {
       return request.createSessionWithHistory({
         workspaceId: scope.workspaceId,
         docId,
-        promptName: 'Chat With AFFiNE AI',
+        promptName: 'Chat With Story AI',
         reuseLatestChat: false,
         pinned: options.pinned,
       });

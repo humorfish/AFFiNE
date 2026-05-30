@@ -180,7 +180,7 @@ export class ChatInputPreference extends SignalWatcher(
               select: () => {
                 if (model.isPro && !isSelfHosted && !isSubscribed) {
                   this.notificationService.toast(
-                    `Pro models require an AFFiNE AI subscription.`
+                    `Pro models require an Story AI subscription.`
                   );
                   return;
                 }

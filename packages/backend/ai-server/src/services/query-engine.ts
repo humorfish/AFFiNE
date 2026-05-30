@@ -1,8 +1,8 @@
 // packages/backend/ai-server/src/services/query-engine.ts
 // Wraps claude-code-best's QueryEngine for use in the AI server
 
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

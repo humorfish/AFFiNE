@@ -1,20 +1,19 @@
 // @ts-nocheck
 // oxlint-disable-next-line no-restricted-imports
 import 'katex/dist/katex.min.css';
-
-import { flip, offset } from '@floating-ui/dom';
-import { html } from 'lit';
-import type { Store, EditorHost } from '@blocksuite/affine/store';
-import { TextSelection, BlockSelection } from '@blocksuite/affine/std';
-import { createLitPortal } from '@blocksuite/affine/components/portal';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import './ai/story-ai-popup';
 
 import { getSelectedTextContent } from '@affine/core/blocksuite/ai/utils/selection-utils';
 import type { AffineEditorContainer } from '@affine/core/blocksuite/block-suite-editor';
 import { BlockSuiteEditor } from '@affine/core/blocksuite/block-suite-editor';
+import { createLitPortal } from '@blocksuite/affine/components/portal';
+import { BlockSelection, TextSelection } from '@blocksuite/affine/std';
+import type { EditorHost, Store } from '@blocksuite/affine/store';
+import { flip, offset } from '@floating-ui/dom';
+import { html } from 'lit';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { setupStoryAI } from './ai/setup';
-import './ai/story-ai-popup';
 import { useStory } from './story-context';
 
 let initialized = false;
@@ -627,13 +626,20 @@ function AffineEditorWrapper({
       const host = hostRef.current;
       if (!host) return;
 
+      // Only respond to selections inside the editor, not sidebar/AI panel/etc.
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      const editorRoot = wrapperRef.current;
+      if (!editorRoot || !editorRoot.contains(range.commonAncestorContainer))
+        return;
+
       if (wasOpen && !popupOpenRef.current) {
         lastSelectedText = '';
         wasOpen = false;
       }
 
-      const sel = window.getSelection();
-      const text = sel?.toString().trim() ?? '';
+      const text = sel.toString().trim();
 
       if (!text) {
         lastSelectedText = '';

@@ -1,15 +1,29 @@
-import { Framework, FrameworkRoot, LiveData } from '@toeverything/infra';
-import React from 'react';
-
+/* eslint-disable rxjs/finnish */
 import { ServerService } from '@affine/core/modules/cloud';
-import {
-  EditorSettingService,
-} from '@affine/core/modules/editor-setting';
+import { EditorSettingService } from '@affine/core/modules/editor-setting';
 import { ExplorerIconService } from '@affine/core/modules/explorer-icon/services/explorer-icon';
 import { FeatureFlagService } from '@affine/core/modules/feature-flag';
 import { JournalService } from '@affine/core/modules/journal';
 import { AppThemeService } from '@affine/core/modules/theme';
 import { WorkspaceService } from '@affine/core/modules/workspace';
+import { Framework, FrameworkRoot, LiveData } from '@toeverything/infra';
+import React from 'react';
+
+// Suppress "disposable.dispose is not a function" errors from BlockSuite's
+// disposeMember. Story app uses DI stubs that get added to DisposableGroups
+// by extensions but lack .dispose(). These errors are harmless noise — the
+// try/catch in disposeMember already prevents crashes.
+const origError = console.error;
+console.error = (...args: any[]) => {
+  if (
+    args.length === 1 &&
+    args[0] instanceof TypeError &&
+    args[0].message === 'disposable.dispose is not a function'
+  ) {
+    return;
+  }
+  origError.apply(console, args);
+};
 
 const defaultSettings = {
   displayBiDirectionalLink: false,
@@ -31,10 +45,16 @@ const defaultFlags: Record<string, boolean> = {
 };
 
 const settingsLiveData = new LiveData(defaultSettings);
-const serverConfigLiveData = new LiveData({ features: [] as string[], copilot: true });
+const serverConfigLiveData = new LiveData({
+  features: [] as string[],
+  copilot: true,
+});
 
 // Flags must match the Flag interface: { $: LiveData<boolean>, value, set }
-const flagsMap: Record<string, { $: LiveData<boolean>; value: boolean; set: (v: boolean) => void }> = {};
+const flagsMap: Record<
+  string,
+  { $: LiveData<boolean>; value: boolean; set: (v: boolean) => void }
+> = {};
 for (const [k, v] of Object.entries(defaultFlags)) {
   const ld = new LiveData(v);
   flagsMap[k] = { $: ld, value: v, set: () => {} };
@@ -52,7 +72,9 @@ function createLiveDataStub(): any {
   // a proxy that handles $-suffixed properties (e.g., doc.properties$)
   const stubValue = createServiceStub();
   const ld = new LiveData(stubValue);
-  const fn = function() { return fn; } as any;
+  const fn = function () {
+    return fn;
+  } as any;
   // Bind only methods that actually exist on LiveData
   fn.map = ld.map.bind(ld);
   fn.selector = ld.selector.bind(ld);
@@ -77,29 +99,40 @@ function createLiveDataStub(): any {
 function createServiceStub(): any {
   const cache = new Map<string, any>();
 
-  return new Proxy(function() { return null; } as any, {
-    get(_target, prop) {
-      if (typeof prop === 'symbol') {
-        if (prop === Symbol.toPrimitive) return () => '';
-        return undefined;
-      }
-      if (prop === 'toString') return () => '';
-      if (prop === 'valueOf') return () => null;
-      if (prop === '$$typeof') return undefined;
-      if (prop === 'constructor') return undefined;
-
-      if (!cache.has(prop)) {
-        if (typeof prop === 'string' && prop.endsWith('$')) {
-          cache.set(prop, createLiveDataStub());
-        } else {
-          cache.set(prop, createServiceStub());
+  return new Proxy(
+    function () {
+      return null;
+    } as any,
+    {
+      get(_target, prop) {
+        if (typeof prop === 'symbol') {
+          if (prop === Symbol.toPrimitive) return () => '';
+          return undefined;
         }
-      }
-      return cache.get(prop);
-    },
-    set() { return true; },
-    apply() { return null; },
-  });
+        if (prop === 'toString') return () => '';
+        if (prop === 'valueOf') return () => null;
+        if (prop === '$$typeof') return undefined;
+        if (prop === 'constructor') return undefined;
+        // Disposable protocol — allows blocksuite extensions to dispose stubs
+        if (prop === 'dispose') return () => {};
+
+        if (!cache.has(prop)) {
+          if (typeof prop === 'string' && prop.endsWith('$')) {
+            cache.set(prop, createLiveDataStub());
+          } else {
+            cache.set(prop, createServiceStub());
+          }
+        }
+        return cache.get(prop);
+      },
+      set() {
+        return true;
+      },
+      apply() {
+        return null;
+      },
+    }
+  );
 }
 
 const framework = Framework.EMPTY;
@@ -119,7 +152,9 @@ framework.addValue(EditorSettingService, {
     selector(fn: (s: any) => any) {
       return new LiveData(fn(settingsLiveData.value));
     },
-    get(key: string) { return (settingsLiveData.value as any)[key]; },
+    get(key: string) {
+      return (settingsLiveData.value as any)[key];
+    },
     set() {},
   },
 } as any);
@@ -169,11 +204,14 @@ const fallbackProvider = new Proxy(storyFrameworkProvider, {
   get(target, prop, receiver) {
     const value = Reflect.get(target, prop, receiver);
     if (typeof value === 'function') {
-      return function(this: any, ...args: any[]) {
+      return function (this: any, ...args: any[]) {
         try {
           return value.apply(target, args);
         } catch (err: any) {
-          if (err?.name === 'ComponentNotFoundError' || err?.constructor?.name === 'ComponentNotFoundError') {
+          if (
+            err?.name === 'ComponentNotFoundError' ||
+            err?.constructor?.name === 'ComponentNotFoundError'
+          ) {
             return createServiceStub();
           }
           throw err;
@@ -184,8 +222,10 @@ const fallbackProvider = new Proxy(storyFrameworkProvider, {
   },
 });
 
-export const StoryFrameworkRoot = ({ children }: { children: React.ReactNode }) => (
-  <FrameworkRoot framework={fallbackProvider as any}>
-    {children}
-  </FrameworkRoot>
+export const StoryFrameworkRoot = ({
+  children,
+}: {
+  children: React.ReactNode;
+}) => (
+  <FrameworkRoot framework={fallbackProvider as any}>{children}</FrameworkRoot>
 );

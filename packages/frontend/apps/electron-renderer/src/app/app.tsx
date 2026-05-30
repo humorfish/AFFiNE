@@ -1,7 +1,6 @@
-import { useEffect } from 'react';
-
-import { apis } from '@affine/electron-api';
 import { StoryLayout } from '@affine/core/components/story-layout/story-layout';
+import { apis } from '@affine/electron-api';
+import { useEffect } from 'react';
 
 export function App() {
   useEffect(() => {
@@ -9,7 +8,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.dataset.theme = 'dark';
   }, []);
 
   return <StoryLayout />;
