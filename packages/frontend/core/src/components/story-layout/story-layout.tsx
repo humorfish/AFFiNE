@@ -66,7 +66,11 @@ const aiServiceStubs = {
   notificationService: { toast: () => {} },
   aiDraftService: undefined,
   aiToolsConfigService: { getToolsConfig: () => ({}) },
-  aiModelService: { models: stubSignal([]), modelId: stubSignal(undefined), setModel: () => {} },
+  aiModelService: {
+    models: stubSignal([{ id: 'default', name: 'Default', category: 'Default', version: '1.0', isDefault: true, isPro: false }]),
+    modelId: stubSignal('default'),
+    setModel: () => {},
+  },
   peekViewService: {},
   onAISubscribe: async () => {},
   onOpenDoc: () => {},
