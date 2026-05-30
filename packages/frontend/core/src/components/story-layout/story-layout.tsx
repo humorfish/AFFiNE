@@ -38,7 +38,10 @@ const stubSignal = (v: any = undefined) => ({
 // without pulling in the full AFFiNE cloud service layer
 const aiServiceStubs = {
   subscriptionService: {
-    subscription: { revalidate: () => {} },
+    subscription: {
+      revalidate: () => {},
+      ai$: stubSignal({ status: 'active' }),
+    },
   },
   reasoningConfig: {
     enabled: stubSignal(false),
@@ -56,7 +59,7 @@ const aiServiceStubs = {
     getCollections: () => ({ signal: stubSignal([]), cleanup: () => {} }),
     getCollectionPageIds: () => [],
   },
-  serverService: { server: {} },
+  serverService: { server: { config$: stubSignal({ type: 'local' }) } },
   affineFeatureFlagService: { flags: {} },
   affineWorkspaceDialogService: {},
   affineThemeService: { theme$: stubSignal('dark') },
