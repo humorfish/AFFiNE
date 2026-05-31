@@ -12,10 +12,14 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
-export interface ChapterMeta {
+import { loadSession, saveSession } from './session-storage';
+
+// Legacy chapter meta used internally by ChapterContent
+interface LegacyChapterMeta {
   index: number;
   title: string;
   wordCount: number;
@@ -24,8 +28,76 @@ export interface ChapterMeta {
 }
 
 export interface ChapterContent {
-  meta: ChapterMeta;
+  meta: LegacyChapterMeta;
   content: string;
+}
+
+// --- New data models for multi-novel support ---
+
+export interface NovelMeta {
+  id: string;
+  title: string;
+  mode: 'long' | 'short';
+  targetWordCount?: number;
+  targetChapterCount?: number;
+  worldview: string;
+  motivation?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Volume {
+  id: string;
+  title: string;
+  order: number;
+}
+
+export interface ChapterMeta {
+  id: string;
+  docId: string;
+  volumeId?: string;
+  title: string;
+  wordCount: number;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TodoItem {
+  id: string;
+  text: string;
+  done: boolean;
+  createdAt: string;
+  novelId?: string;
+  chapterId?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface ChatSession {
+  id: string;
+  novelId: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionState {
+  activeNovelId: string;
+  activeChapterIndex: number;
+  aiPanelOpen: boolean;
+  aiPanelWidth: number;
+  activeAiTab: 'chat' | 'continue' | 'polish' | 'analyze' | 'explain';
+  activeChatSessionId: string;
+  sidebarCollapsed: boolean;
+  chapterTreeExpandedVolumes: string[];
+  savedAt: string;
 }
 
 export interface NovelProject {
@@ -48,6 +120,13 @@ export interface StoryState {
   activeModule: string;
   loading: boolean;
   error: string | null;
+  // New multi-novel state
+  novels: NovelMeta[];
+  activeNovelId: string;
+  volumes: Volume[];
+  todos: TodoItem[];
+  chatSessions: ChatSession[];
+  activeChatSessionId: string;
 }
 
 interface StoryActions {
@@ -66,6 +145,18 @@ interface StoryActions {
   deleteChapter: (index: number) => Promise<void>;
   setActiveModule: (module: string) => void;
   getChapterStore: (chapterIndex: number) => Store | null;
+  // New multi-novel actions
+  createNovel: (
+    data: Omit<NovelMeta, 'id' | 'createdAt' | 'updatedAt'>
+  ) => void;
+  switchNovel: (id: string) => void;
+  deleteNovel: (id: string) => void;
+  addVolume: (title: string) => void;
+  addTodo: (text: string) => void;
+  toggleTodo: (id: string) => void;
+  deleteTodo: (id: string) => void;
+  createChatSession: () => void;
+  switchChatSession: (id: string) => void;
 }
 
 type StoryContextValue = StoryState & StoryActions;
@@ -78,6 +169,9 @@ const STORAGE_KEYS = {
   activeChapterIndex: 'story-active-chapter-index',
   projectMeta: 'story-project-meta',
   chaptersData: 'story-chapters-data',
+  novels: 'story-novels',
+  todos: 'story-todos',
+  chatSessions: 'story-chat-sessions',
 };
 
 function loadFromStorage<T>(key: string): T | null {
@@ -148,6 +242,81 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // New multi-novel state
+  const [novels, setNovels] = useState<NovelMeta[]>(
+    () => loadFromStorage<NovelMeta[]>(STORAGE_KEYS.novels) ?? []
+  );
+  const [activeNovelId, setActiveNovelId] = useState<string>(
+    () => loadSession()?.activeNovelId ?? ''
+  );
+  const [volumes, setVolumes] = useState<Volume[]>([]);
+  const [todos, setTodos] = useState<TodoItem[]>(
+    () => loadFromStorage<TodoItem[]>(STORAGE_KEYS.todos) ?? []
+  );
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>(
+    () => loadFromStorage<ChatSession[]>(STORAGE_KEYS.chatSessions) ?? []
+  );
+  const [activeChatSessionId, setActiveChatSessionId] = useState<string>(
+    () => loadSession()?.activeChatSessionId ?? ''
+  );
+
+  // Debounced session save timer
+  const sessionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // --- Session restore on mount ---
+  useEffect(() => {
+    const session = loadSession();
+    if (session) {
+      if (session.activeNovelId) {
+        setActiveNovelId(session.activeNovelId);
+      }
+      if (session.activeChapterIndex !== undefined) {
+        setActiveChapterIndex(session.activeChapterIndex);
+      }
+      if (session.activeChatSessionId) {
+        setActiveChatSessionId(session.activeChatSessionId);
+      }
+    }
+  }, []);
+
+  // --- Debounced session persistence ---
+  const debouncedSaveSession = useCallback((partial: Partial<SessionState>) => {
+    if (sessionSaveTimer.current) {
+      clearTimeout(sessionSaveTimer.current);
+    }
+    sessionSaveTimer.current = setTimeout(() => {
+      saveSession(partial);
+    }, 500);
+  }, []);
+
+  // Save session when key state changes
+  useEffect(() => {
+    if (activeNovelId) {
+      debouncedSaveSession({ activeNovelId });
+    }
+  }, [activeNovelId, debouncedSaveSession]);
+
+  useEffect(() => {
+    if (activeChapterIndex !== null) {
+      debouncedSaveSession({ activeChapterIndex });
+    }
+  }, [activeChapterIndex, debouncedSaveSession]);
+
+  useEffect(() => {
+    if (activeChatSessionId) {
+      debouncedSaveSession({ activeChatSessionId });
+    }
+  }, [activeChatSessionId, debouncedSaveSession]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (sessionSaveTimer.current) {
+        clearTimeout(sessionSaveTimer.current);
+      }
+    };
+  }, []);
+
   // Persist project and chapters to localStorage on change
   useEffect(() => {
     if (project) {
@@ -160,6 +329,19 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.chaptersData, chapters);
   }, [chapters]);
+
+  // Persist new state
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.novels, novels);
+  }, [novels]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.todos, todos);
+  }, [todos]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.chatSessions, chatSessions);
+  }, [chatSessions]);
 
   const chapterStores = React.useMemo(() => new Map<number, Store>(), []);
 
@@ -304,6 +486,109 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     [project, activeChapterIndex]
   );
 
+  // --- New multi-novel CRUD actions ---
+
+  const createNovel = useCallback(
+    (data: Omit<NovelMeta, 'id' | 'createdAt' | 'updatedAt'>) => {
+      const now = new Date().toISOString();
+      const novel: NovelMeta = {
+        ...data,
+        id: crypto.randomUUID(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      setNovels(prev => [...prev, novel]);
+      setActiveNovelId(novel.id);
+    },
+    []
+  );
+
+  const switchNovel = useCallback(
+    (id: string) => {
+      const novel = novels.find(n => n.id === id);
+      if (!novel) return;
+      setActiveNovelId(id);
+      // Load volumes for the target novel (currently placeholder — volumes
+      // are stored per-novel in localStorage, keyed by novel id)
+      const volumesKey = `story-volumes-${id}`;
+      const loaded = loadFromStorage<Volume[]>(volumesKey) ?? [];
+      setVolumes(loaded);
+      // Reset chapter selection when switching novels
+      setActiveChapterIndex(null);
+    },
+    [novels]
+  );
+
+  const deleteNovel = useCallback(
+    (id: string) => {
+      setNovels(prev => prev.filter(n => n.id !== id));
+      // Remove per-novel volumes from storage
+      localStorage.removeItem(`story-volumes-${id}`);
+      // If the deleted novel was active, reset
+      if (activeNovelId === id) {
+        setActiveNovelId('');
+        setVolumes([]);
+        setActiveChapterIndex(null);
+      }
+    },
+    [activeNovelId]
+  );
+
+  const addVolume = useCallback(
+    (title: string) => {
+      if (!activeNovelId) return;
+      const vol: Volume = {
+        id: crypto.randomUUID(),
+        title,
+        order: volumes.length,
+      };
+      const next = [...volumes, vol];
+      setVolumes(next);
+      // Persist per-novel volumes
+      saveToStorage(`story-volumes-${activeNovelId}`, next);
+    },
+    [activeNovelId, volumes]
+  );
+
+  const addTodo = useCallback((text: string) => {
+    const todo: TodoItem = {
+      id: crypto.randomUUID(),
+      text,
+      done: false,
+      createdAt: new Date().toISOString(),
+    };
+    setTodos(prev => [...prev, todo]);
+  }, []);
+
+  const toggleTodo = useCallback((id: string) => {
+    setTodos(prev =>
+      prev.map(t => (t.id === id ? { ...t, done: !t.done } : t))
+    );
+  }, []);
+
+  const deleteTodo = useCallback((id: string) => {
+    setTodos(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  const createChatSession = useCallback(() => {
+    if (!activeNovelId) return;
+    const now = new Date().toISOString();
+    const session: ChatSession = {
+      id: crypto.randomUUID(),
+      novelId: activeNovelId,
+      title: 'New Chat',
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    setChatSessions(prev => [...prev, session]);
+    setActiveChatSessionId(session.id);
+  }, [activeNovelId]);
+
+  const switchChatSession = useCallback((id: string) => {
+    setActiveChatSessionId(id);
+  }, []);
+
   const value = useMemo<StoryContextValue>(
     () => ({
       project,
@@ -312,6 +597,14 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       activeModule,
       loading,
       error,
+      // New state
+      novels,
+      activeNovelId,
+      volumes,
+      todos,
+      chatSessions,
+      activeChatSessionId,
+      // Legacy actions
       createProject,
       addChapter,
       selectChapter,
@@ -319,6 +612,16 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       deleteChapter,
       setActiveModule,
       getChapterStore,
+      // New actions
+      createNovel,
+      switchNovel,
+      deleteNovel,
+      addVolume,
+      addTodo,
+      toggleTodo,
+      deleteTodo,
+      createChatSession,
+      switchChatSession,
     }),
     [
       project,
@@ -327,6 +630,12 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       activeModule,
       loading,
       error,
+      novels,
+      activeNovelId,
+      volumes,
+      todos,
+      chatSessions,
+      activeChatSessionId,
       createProject,
       addChapter,
       selectChapter,
@@ -334,6 +643,15 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       deleteChapter,
       setActiveModule,
       getChapterStore,
+      createNovel,
+      switchNovel,
+      deleteNovel,
+      addVolume,
+      addTodo,
+      toggleTodo,
+      deleteTodo,
+      createChatSession,
+      switchChatSession,
     ]
   );
 
