@@ -1,4 +1,4 @@
-export { NewNovelDialog } from './new-novel-dialog';
+export { NovelDialog } from './novel-dialog';
 export { clearSession, loadSession, saveSession } from './session-storage';
 export { SettingsPage } from './settings-page';
 export type { AiTab } from './story-ai-panel';

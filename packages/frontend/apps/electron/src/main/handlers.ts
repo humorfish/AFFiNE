@@ -10,6 +10,7 @@ import { getLogFilePath, logger, revealLogFile } from './logger';
 import { recordingHandlers } from './recording';
 import { checkSource } from './security-restrictions';
 import { sharedStorageHandlers } from './shared-storage';
+import { storyHandlers } from './story/handlers';
 import { uiHandlers } from './ui/handlers';
 import { updaterHandlers } from './updater';
 import { popupHandlers } from './windows-manager/popup';
@@ -39,6 +40,7 @@ export const allHandlers = {
   configStorage: configStorageHandlers,
   findInPage: findInPageHandlers,
   sharedStorage: sharedStorageHandlers,
+  story: storyHandlers,
   worker: workerHandlers,
   recording: recordingHandlers,
   popup: popupHandlers,

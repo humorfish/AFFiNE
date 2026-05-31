@@ -13,6 +13,7 @@ interface ModalProps {
   open: boolean;
   onClose: () => void;
   title: string;
+  titleExtra?: ReactNode;
   width?: number;
   dismissible?: boolean;
   children: ReactNode;
@@ -22,6 +23,7 @@ export function Modal({
   open,
   onClose,
   title,
+  titleExtra,
   width = 560,
   dismissible = true,
   children,
@@ -83,9 +85,12 @@ export function Modal({
             justifyContent: 'space-between',
           }}
         >
-          <span style={{ color: THEME.text, fontSize: 16, fontWeight: 600 }}>
-            {title}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ color: THEME.text, fontSize: 16, fontWeight: 600 }}>
+              {title}
+            </span>
+            {titleExtra}
+          </div>
           {dismissible && (
             <button
               onClick={onClose}

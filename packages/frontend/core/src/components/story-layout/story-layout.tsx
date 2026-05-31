@@ -15,7 +15,7 @@ import { WorkspaceAIChatSessionStrategy } from '../../blocksuite/ai/runtime/chat
 import { useAIChatElement } from '../../blocksuite/ai/runtime/chat/use-element';
 import { useAIChatRuntime } from '../../blocksuite/ai/runtime/chat/use-runtime';
 import { getStoryAIRequestService } from './ai/setup';
-import { NewNovelDialog } from './new-novel-dialog';
+import { NovelDialog } from './novel-dialog';
 import { PlaceholderDialog } from './placeholder-dialog';
 import { loadSession, saveSession } from './session-storage';
 import { SettingsDialog } from './settings-dialog';
@@ -188,6 +188,9 @@ const StoryLayoutContent = () => {
   const [expandedVolumes, setExpandedVolumes] = useState<string[]>([]);
   const [focusMode, setFocusMode] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [dirtyChapterIds, setDirtyChapterIds] = useState<Set<string>>(
+    new Set()
+  );
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
@@ -224,6 +227,21 @@ const StoryLayoutContent = () => {
     setAiPanelOpen(true);
   }, []);
 
+  const handleEditorDirtyChange = useCallback(
+    (dirty: boolean, chapterId: string) => {
+      setDirtyChapterIds(prev => {
+        const next = new Set(prev);
+        if (dirty) {
+          next.add(chapterId);
+        } else {
+          next.delete(chapterId);
+        }
+        return next;
+      });
+    },
+    []
+  );
+
   return (
     <StoryFrameworkRoot>
       <WorkspaceProvider>
@@ -253,6 +271,8 @@ const StoryLayoutContent = () => {
             setSidebarCollapsed={setSidebarCollapsed}
             openChatWithPrompt={openChatWithPrompt}
             chatContainerRef={chatContainerRef}
+            dirtyChapterIds={dirtyChapterIds}
+            onEditorDirtyChange={handleEditorDirtyChange}
           />
         </StoryProvider>
       </WorkspaceProvider>
@@ -283,6 +303,8 @@ function StoryLayoutInner({
   setSidebarCollapsed,
   openChatWithPrompt,
   chatContainerRef,
+  dirtyChapterIds,
+  onEditorDirtyChange,
 }: {
   aiPanelOpen: boolean;
   setAiPanelOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -308,6 +330,8 @@ function StoryLayoutInner({
   setSidebarCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
   openChatWithPrompt: (prompt: string) => void;
   chatContainerRef: React.RefObject<HTMLDivElement | null>;
+  dirtyChapterIds: Set<string>;
+  onEditorDirtyChange: (dirty: boolean, chapterId: string) => void;
 }) {
   const sessionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -364,13 +388,17 @@ function StoryLayoutInner({
     novels,
     activeNovelId,
     chapters,
-    activeChapterIndex,
-    volumes,
+    activeChapterId,
+    volumes: _volumes,
     todos,
     addChapter,
-    addVolume,
+    addVolume: _addVolume,
     selectChapter,
+    deleteChapter,
     createNovel,
+    updateNovel,
+    deleteNovel,
+    switchNovel,
     addTodo,
     toggleTodo,
     deleteTodo,
@@ -381,7 +409,7 @@ function StoryLayoutInner({
     sessionSaveTimer.current = setTimeout(() => {
       saveSession({
         activeNovelId,
-        activeChapterIndex: activeChapterIndex ?? -1,
+        activeChapterId,
       });
     }, 500);
     return () => {
@@ -389,11 +417,11 @@ function StoryLayoutInner({
         clearTimeout(sessionSaveTimer.current);
         saveSession({
           activeNovelId,
-          activeChapterIndex: activeChapterIndex ?? -1,
+          activeChapterId,
         });
       }
     };
-  }, [activeNovelId, activeChapterIndex]);
+  }, [activeNovelId, activeChapterId]);
 
   const handleNavClick = useCallback(
     (id: string) => {
@@ -421,9 +449,44 @@ function StoryLayoutInner({
     [createNovel, setShowNewNovelDialog]
   );
 
+  const handleUpdateNovel = useCallback(
+    (
+      id: string,
+      data: {
+        title: string;
+        mode: 'long' | 'short';
+        targetWordCount?: number;
+        targetChapterCount?: number;
+        worldview: string;
+        motivation?: string;
+      }
+    ) => {
+      updateNovel(id, data);
+    },
+    [updateNovel]
+  );
+
   const handleNovelAction = useCallback(() => {
     setShowNewNovelDialog(true);
   }, [setShowNewNovelDialog]);
+
+  const activeNovel = novels.find(n => n.id === activeNovelId);
+  const novelMode = activeNovel?.mode ?? 'long';
+
+  const handleSelectChapter = useCallback(
+    (id: string) => {
+      const ch = chapters.find(c => c.meta.id === id);
+      if (!ch) return;
+      // Long novel: only load editor for child chapters (level-2)
+      // Short novel: load editor for all chapters (level-1)
+      const isLoadable =
+        novelMode === 'short' ? true : ch.meta.parentId != null;
+      if (isLoadable) {
+        selectChapter(id);
+      }
+    },
+    [novelMode, chapters, selectChapter]
+  );
 
   const showSidebar = !focusMode && !sidebarCollapsed;
 
@@ -431,7 +494,7 @@ function StoryLayoutInner({
     <>
       <div style={styles.root}>
         <StoryTopBar
-          activeNovel={novels.find(n => n.id === activeNovelId) ?? null}
+          activeNovel={activeNovel}
           hasNovels={novels.length > 0}
           activeNavId={activeNavId}
           onNavClick={handleNavClick}
@@ -454,23 +517,23 @@ function StoryLayoutInner({
             />
             {activeNovelId ? (
               <StoryChapterTree
-                volumes={volumes}
                 chapters={chapters.map(ch => ({
-                  id: ch.meta.index.toString(),
-                  docId: `chapter:ch-${ch.meta.index}`,
-                  volumeId: undefined,
+                  id: ch.meta.id,
+                  parentId: ch.meta.parentId ?? null,
                   title: ch.meta.title,
                   wordCount: ch.meta.wordCount,
-                  order: ch.meta.index,
+                  order: ch.meta.createdAt
+                    ? new Date(ch.meta.createdAt).getTime()
+                    : 0,
                   createdAt: ch.meta.createdAt,
                   updatedAt: ch.meta.updatedAt,
                 }))}
-                activeChapterIndex={activeChapterIndex ?? -1}
-                expandedVolumes={expandedVolumes}
-                onExpandedVolumesChange={setExpandedVolumes}
-                onSelectChapter={i => selectChapter(i)}
-                onAddChapter={() => addChapter('新章节', '')}
-                onAddVolume={() => addVolume('新卷')}
+                activeChapterId={activeChapterId}
+                novelMode={novelMode}
+                dirtyChapterIds={dirtyChapterIds}
+                onSelectChapter={handleSelectChapter}
+                onAddChapter={parentId => addChapter('', '', parentId ?? null)}
+                onDeleteChapter={id => deleteChapter(id)}
                 theme={THEME}
               />
             ) : (
@@ -483,6 +546,7 @@ function StoryLayoutInner({
             focusMode={focusMode}
             onFocusToggle={() => setFocusMode(p => !p)}
             onSendToChat={openChatWithPrompt}
+            onDirtyChange={onEditorDirtyChange}
             theme={THEME}
           />
 
@@ -511,10 +575,15 @@ function StoryLayoutInner({
       </div>
 
       {/* Dialogs */}
-      <NewNovelDialog
+      <NovelDialog
         open={showNewNovelDialog}
         onClose={() => setShowNewNovelDialog(false)}
+        novels={novels}
+        activeNovelId={activeNovelId}
         onCreate={handleCreateNovel}
+        onUpdate={handleUpdateNovel}
+        onDelete={deleteNovel}
+        onSwitch={switchNovel}
       />
       <SettingsDialog
         open={activeNavId === 'settings'}

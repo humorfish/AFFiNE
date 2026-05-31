@@ -1,6 +1,6 @@
 import { app, clipboard, nativeImage, nativeTheme } from 'electron';
 import { getLinkPreview } from 'link-preview-js';
-import { map } from 'rxjs';
+import { map, shareReplay } from 'rxjs';
 
 import { isMacOS } from '../../shared/utils';
 import { persistentConfig } from '../config-storage/persist';

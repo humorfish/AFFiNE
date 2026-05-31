@@ -1,23 +1,25 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
+
+import { Modal } from './modal';
+
+export interface ChapterNode {
+  id: string;
+  parentId: string | null;
+  title: string;
+  wordCount: number;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface StoryChapterTreeProps {
-  volumes: { id: string; title: string; order: number }[];
-  chapters: {
-    id: string;
-    docId: string;
-    volumeId?: string;
-    title: string;
-    wordCount: number;
-    order: number;
-    createdAt: string;
-    updatedAt: string;
-  }[];
-  activeChapterIndex: number;
-  expandedVolumes: string[];
-  onExpandedVolumesChange: (ids: string[]) => void;
-  onSelectChapter: (index: number) => void;
-  onAddChapter: () => void;
-  onAddVolume: () => void;
+  chapters: ChapterNode[];
+  activeChapterId: string;
+  novelMode: 'long' | 'short';
+  dirtyChapterIds: Set<string>;
+  onSelectChapter: (id: string) => void;
+  onAddChapter: (parentId?: string | null) => void;
+  onDeleteChapter: (id: string) => void;
   theme: {
     panel: string;
     text: string;
@@ -34,118 +36,197 @@ function formatWordCount(count: number): string {
 }
 
 export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
-  volumes,
   chapters,
-  activeChapterIndex,
-  expandedVolumes,
-  onExpandedVolumesChange,
+  activeChapterId,
+  novelMode,
+  dirtyChapterIds,
   onSelectChapter,
   onAddChapter,
-  onAddVolume,
+  onDeleteChapter,
   theme,
 }) => {
-  const isTreeMode = volumes.length > 0;
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    title: string;
+    childCount: number;
+  } | null>(null);
 
-  const chaptersByVolume = useMemo(() => {
-    const map = new Map<string, typeof chapters>();
-    const ungrouped: typeof chapters = [];
-    for (const vol of volumes) map.set(vol.id, []);
+  const { roots, childrenMap } = useMemo(() => {
+    const roots: ChapterNode[] = [];
+    const childrenMap = new Map<string, ChapterNode[]>();
     for (const ch of chapters) {
-      if (ch.volumeId && map.has(ch.volumeId)) {
-        map.get(ch.volumeId)?.push(ch);
+      if (ch.parentId == null) {
+        roots.push(ch);
       } else {
-        ungrouped.push(ch);
+        let list = childrenMap.get(ch.parentId);
+        if (!list) {
+          list = [];
+          childrenMap.set(ch.parentId, list);
+        }
+        list.push(ch);
       }
     }
-    return { map, ungrouped };
-  }, [volumes, chapters]);
-
-  const sortedVolumes = useMemo(
-    () => [...volumes].sort((a, b) => a.order - b.order),
-    [volumes]
-  );
-
-  const sortedChapters = useMemo(
-    () => [...chapters].sort((a, b) => a.order - b.order),
-    [chapters]
-  );
-
-  const chapterIndexLookup = useMemo(() => {
-    const lookup = new Map<string, number>();
-    sortedChapters.forEach((ch, idx) => lookup.set(ch.id, idx));
-    return lookup;
-  }, [sortedChapters]);
+    roots.sort((a, b) => a.order - b.order);
+    for (const list of childrenMap.values()) {
+      list.sort((a, b) => a.order - b.order);
+    }
+    return { roots, childrenMap };
+  }, [chapters]);
 
   const totalWordCount = useMemo(
     () => chapters.reduce((sum, ch) => sum + ch.wordCount, 0),
     [chapters]
   );
 
-  const handleToggleVolume = (volumeId: string) => {
-    if (expandedVolumes.includes(volumeId)) {
-      onExpandedVolumesChange(expandedVolumes.filter(id => id !== volumeId));
-    } else {
-      onExpandedVolumesChange([...expandedVolumes, volumeId]);
+  // Calculate display numbering: parent uses parent sequence, child uses child sequence
+  const numberingMap = useMemo(() => {
+    const map = new Map<string, string>();
+    roots.forEach((root, parentIdx) => {
+      const parentNum = parentIdx + 1;
+      map.set(root.id, String(parentNum));
+      const children = childrenMap.get(root.id) ?? [];
+      children.forEach((child, childIdx) => {
+        map.set(child.id, `${parentNum}-${childIdx + 1}`);
+      });
+    });
+    return map;
+  }, [roots, childrenMap]);
+
+  const getDescendantCount = useCallback(
+    (parentId: string): number => {
+      const kids = childrenMap.get(parentId) ?? [];
+      let count = kids.length;
+      for (const kid of kids) {
+        count += getDescendantCount(kid.id);
+      }
+      return count;
+    },
+    [childrenMap]
+  );
+
+  const handleConfirmDelete = useCallback(() => {
+    if (deleteTarget) {
+      onDeleteChapter(deleteTarget.id);
+      setDeleteTarget(null);
     }
+  }, [deleteTarget, onDeleteChapter]);
+
+  // Long novel: max 2 levels → can add child only at depth 0
+  // Short novel: max 1 level → never add child from row button
+  const canAddChild = (depth: number) => {
+    if (novelMode === 'short') return false;
+    return depth === 0;
   };
 
-  const renderChapter = (ch: (typeof chapters)[0], indent = false) => {
-    const idx = chapterIndexLookup.get(ch.id) ?? -1;
-    const isActive = activeChapterIndex === idx;
+  const getDisplayTitle = (ch: ChapterNode) => {
+    const num = numberingMap.get(ch.id) ?? '';
+    return ch.title ? `${ch.title} ${num}` : `章节 ${num}`;
+  };
+
+  const renderChapter = (ch: ChapterNode, depth: number) => {
+    const isActive = activeChapterId === ch.id;
+    const isDirty = dirtyChapterIds.has(ch.id);
+
     return (
-      <div
-        key={ch.id}
-        onClick={() => onSelectChapter(idx)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '4px 8px',
-          paddingLeft: indent ? 24 : 8,
-          borderRadius: 4,
-          cursor: 'pointer',
-          margin: '1px 0',
-          fontSize: 12,
-          lineHeight: '22px',
-          color: isActive ? '#fff' : theme.textMuted,
-          background: isActive ? theme.active : 'transparent',
-          transition: 'background 0.12s, color 0.12s',
-          userSelect: 'none',
-        }}
-        onMouseEnter={e => {
-          if (!isActive) {
-            e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-            e.currentTarget.style.color = theme.text;
-          }
-        }}
-        onMouseLeave={e => {
-          if (!isActive) {
-            e.currentTarget.style.background = 'transparent';
-            e.currentTarget.style.color = theme.textMuted;
-          }
-        }}
-      >
-        <span
+      <div key={ch.id}>
+        <div
           style={{
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            flex: 1,
-            marginRight: 6,
+            display: 'flex',
+            alignItems: 'center',
+            padding: `3px 8px 3px ${12 + depth * 16}px`,
+            borderRadius: 3,
+            margin: '1px 0',
+            fontSize: 12,
+            lineHeight: '20px',
+            color: isActive ? '#fff' : theme.textMuted,
+            background: isActive ? theme.active : 'transparent',
+            transition: 'background 0.12s, color 0.12s',
+            userSelect: 'none',
+          }}
+          onMouseEnter={e => {
+            if (!isActive) {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+              e.currentTarget.style.color = theme.text;
+            }
+          }}
+          onMouseLeave={e => {
+            if (!isActive) {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.color = theme.textMuted;
+            }
           }}
         >
-          {isActive && <span style={{ marginRight: 4, opacity: 0.6 }}>←</span>}
-          {ch.title}
-        </span>
-        <span
-          style={{
-            fontSize: 10,
-            flexShrink: 0,
-            opacity: isActive ? 0.8 : 0.5,
-          }}
-        >
-          {ch.wordCount > 0 ? formatWordCount(ch.wordCount) : ''}
-        </span>
+          <span
+            onClick={() => onSelectChapter(ch.id)}
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              flex: 1,
+              marginRight: 6,
+              cursor: 'pointer',
+            }}
+          >
+            {getDisplayTitle(ch)}
+          </span>
+          {isDirty && (
+            <span
+              style={{
+                fontSize: 9,
+                color: '#f0a030',
+                marginRight: 4,
+                flexShrink: 0,
+              }}
+            >
+              未保存
+            </span>
+          )}
+          <span
+            style={{
+              fontSize: 10,
+              flexShrink: 0,
+              opacity: 0.5,
+              marginRight: 4,
+            }}
+          >
+            {ch.wordCount > 0 ? formatWordCount(ch.wordCount) : ''}
+          </span>
+
+          {/* Action buttons */}
+          <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+            {canAddChild(depth) && (
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  onAddChapter(ch.id);
+                }}
+                title="添加子章节"
+                style={treeBtnStyle}
+              >
+                +
+              </button>
+            )}
+            <button
+              onClick={e => {
+                e.stopPropagation();
+                setDeleteTarget({
+                  id: ch.id,
+                  title: getDisplayTitle(ch),
+                  childCount: getDescendantCount(ch.id),
+                });
+              }}
+              title="删除"
+              style={treeBtnStyle}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        {/* Children */}
+        {(childrenMap.get(ch.id) ?? []).map(child =>
+          renderChapter(child, depth + 1)
+        )}
       </div>
     );
   };
@@ -170,87 +251,20 @@ export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
         }}
       >
         <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}>
-          章节
+          章节管理
         </span>
-        <div style={{ display: 'flex', gap: 2 }}>
-          {isTreeMode && (
-            <button onClick={onAddVolume} title="新建卷" style={iconBtn(theme)}>
-              📁
-            </button>
-          )}
-          <button
-            onClick={onAddChapter}
-            title="新建章节"
-            style={iconBtn(theme)}
-          >
-            +
-          </button>
-        </div>
+        <button
+          onClick={() => onAddChapter(null)}
+          title="新建一级章节"
+          style={iconBtn(theme)}
+        >
+          +
+        </button>
       </div>
 
       {/* Scrollable tree */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 6px' }}>
-        {isTreeMode
-          ? sortedVolumes.map(vol => {
-              const volChapters = chaptersByVolume.map.get(vol.id) ?? [];
-              const isExpanded = expandedVolumes.includes(vol.id);
-              const volWC = volChapters.reduce((s, c) => s + c.wordCount, 0);
-
-              return (
-                <div key={vol.id} style={{ marginBottom: 2 }}>
-                  {/* Volume header */}
-                  <div
-                    onClick={() => handleToggleVolume(vol.id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '4px 6px',
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: theme.text,
-                      cursor: 'pointer',
-                      borderRadius: 4,
-                      userSelect: 'none',
-                      lineHeight: '22px',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.background =
-                        'rgba(255,255,255,0.04)';
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = 'transparent';
-                    }}
-                  >
-                    <span
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                      }}
-                    >
-                      <span style={{ fontSize: 9, color: theme.textMuted }}>
-                        {isExpanded ? '▼' : '▶'}
-                      </span>
-                      <span style={{ fontSize: 11 }}>📁</span>
-                      <span>{vol.title}</span>
-                    </span>
-                    <span style={{ fontSize: 10, color: theme.textMuted }}>
-                      {volChapters.length > 0
-                        ? `${volChapters.length}章${volWC > 0 ? ` · ${formatWordCount(volWC)}` : ''}`
-                        : ''}
-                    </span>
-                  </div>
-
-                  {/* Chapters under volume */}
-                  {isExpanded &&
-                    [...volChapters]
-                      .sort((a, b) => a.order - b.order)
-                      .map(ch => renderChapter(ch, true))}
-                </div>
-              );
-            })
-          : sortedChapters.map(ch => renderChapter(ch, false))}
+        {roots.map(ch => renderChapter(ch, 0))}
 
         {chapters.length === 0 && (
           <div
@@ -279,26 +293,89 @@ export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
           lineHeight: '18px',
         }}
       >
-        {isTreeMode
-          ? `${volumes.length} 卷 · ${chapters.length} 章${totalWordCount > 0 ? ` · ${formatWordCount(totalWordCount)}` : ''}`
-          : `${chapters.length} 章${totalWordCount > 0 ? ` · ${formatWordCount(totalWordCount)}` : ''}`}
+        {chapters.length} 章
+        {totalWordCount > 0 ? ` · ${formatWordCount(totalWordCount)}` : ''}
       </div>
+
+      {/* Delete confirmation modal */}
+      <Modal
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        title="删除确认"
+        width={400}
+      >
+        <div style={{ color: '#e0e0e0', fontSize: 14, lineHeight: 1.6 }}>
+          <p>
+            章节「{deleteTarget?.title}」和章节下的所有文档都会被删除，请确认？
+          </p>
+          {deleteTarget && deleteTarget.childCount > 0 && (
+            <p style={{ color: '#e74c3c', fontSize: 12, marginTop: 8 }}>
+              该章节下有 {deleteTarget.childCount} 个子章节也将被一并删除
+            </p>
+          )}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 8,
+            marginTop: 20,
+          }}
+        >
+          <button onClick={() => setDeleteTarget(null)} style={btnCancelStyle}>
+            取消
+          </button>
+          <button onClick={handleConfirmDelete} style={btnDeleteStyle}>
+            确认删除
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 };
 
-function iconBtn(theme: {
-  border: string;
-  textMuted: string;
-}): React.CSSProperties {
+const treeBtnStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 2,
+  cursor: 'pointer',
+  padding: '0 3px',
+  fontSize: 12,
+  lineHeight: '18px',
+  color: 'inherit',
+  opacity: 0.6,
+};
+
+function iconBtn(theme: { textMuted: string }): React.CSSProperties {
   return {
     background: 'transparent',
     border: 'none',
     borderRadius: 3,
     cursor: 'pointer',
     padding: '1px 4px',
-    fontSize: 13,
+    fontSize: 14,
     color: theme.textMuted,
     lineHeight: 1,
   };
 }
+
+const btnCancelStyle: React.CSSProperties = {
+  padding: '8px 16px',
+  background: 'transparent',
+  border: '1px solid #2a2a4a',
+  borderRadius: 6,
+  color: '#8888aa',
+  cursor: 'pointer',
+  fontSize: 13,
+};
+
+const btnDeleteStyle: React.CSSProperties = {
+  padding: '8px 16px',
+  background: '#e74c3c',
+  border: 'none',
+  borderRadius: 6,
+  color: '#ffffff',
+  cursor: 'pointer',
+  fontSize: 13,
+  fontWeight: 600,
+};

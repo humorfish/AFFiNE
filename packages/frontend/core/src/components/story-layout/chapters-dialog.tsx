@@ -12,7 +12,7 @@ export function ChaptersDialog({ open, onClose }: ChaptersDialogProps) {
   const {
     project,
     chapters,
-    activeChapterIndex,
+    activeChapterId,
     addChapter,
     selectChapter,
     deleteChapter,
@@ -31,18 +31,18 @@ export function ChaptersDialog({ open, onClose }: ChaptersDialogProps) {
   }, [newTitle, addChapter]);
 
   const handleSelect = useCallback(
-    async (index: number) => {
-      await selectChapter(index);
+    async (id: string) => {
+      await selectChapter(id);
       onClose();
     },
     [selectChapter, onClose]
   );
 
   const handleDelete = useCallback(
-    async (e: React.MouseEvent, index: number) => {
+    async (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
       if (confirm('确定要删除这个章节吗？')) {
-        await deleteChapter(index);
+        await deleteChapter(id);
       }
     },
     [deleteChapter]
@@ -89,7 +89,11 @@ export function ChaptersDialog({ open, onClose }: ChaptersDialogProps) {
                     autoFocus
                     style={{ flex: 1, ...inputStyle }}
                   />
-                  <button onClick={handleAdd} disabled={!newTitle.trim()} style={btnPrimary}>
+                  <button
+                    onClick={handleAdd}
+                    disabled={!newTitle.trim()}
+                    style={btnPrimary}
+                  >
                     添加
                   </button>
                   <button
@@ -113,7 +117,9 @@ export function ChaptersDialog({ open, onClose }: ChaptersDialogProps) {
             </div>
 
             {loading && (
-              <div style={{ color: '#8888aa', textAlign: 'center', fontSize: 12 }}>
+              <div
+                style={{ color: '#8888aa', textAlign: 'center', fontSize: 12 }}
+              >
                 加载中...
               </div>
             )}
@@ -133,16 +139,16 @@ export function ChaptersDialog({ open, onClose }: ChaptersDialogProps) {
               ) : (
                 chapters.map(ch => (
                   <div
-                    key={ch.meta.index}
-                    onClick={() => handleSelect(ch.meta.index)}
+                    key={ch.meta.id}
+                    onClick={() => handleSelect(ch.meta.id)}
                     style={{
                       padding: '10px 12px',
                       borderRadius: 6,
                       cursor: 'pointer',
                       color:
-                        activeChapterIndex === ch.meta.index ? '#e0e0e0' : '#8888aa',
+                        activeChapterId === ch.meta.id ? '#e0e0e0' : '#8888aa',
                       background:
-                        activeChapterIndex === ch.meta.index
+                        activeChapterId === ch.meta.id
                           ? 'rgba(108, 92, 231, 0.15)'
                           : 'transparent',
                       display: 'flex',
@@ -152,11 +158,12 @@ export function ChaptersDialog({ open, onClose }: ChaptersDialogProps) {
                       transition: 'background 0.1s',
                     }}
                     onMouseEnter={e => {
-                      if (activeChapterIndex !== ch.meta.index)
-                        e.currentTarget.style.background = 'rgba(108, 92, 231, 0.08)';
+                      if (activeChapterId !== ch.meta.id)
+                        e.currentTarget.style.background =
+                          'rgba(108, 92, 231, 0.08)';
                     }}
                     onMouseLeave={e => {
-                      if (activeChapterIndex !== ch.meta.index)
+                      if (activeChapterId !== ch.meta.id)
                         e.currentTarget.style.background = 'transparent';
                     }}
                   >
@@ -168,10 +175,10 @@ export function ChaptersDialog({ open, onClose }: ChaptersDialogProps) {
                         flex: 1,
                       }}
                     >
-                      {ch.meta.title}
+                      {ch.meta.title || '章节'}
                     </span>
                     <button
-                      onClick={e => handleDelete(e, ch.meta.index)}
+                      onClick={e => handleDelete(e, ch.meta.id)}
                       style={{
                         background: 'transparent',
                         border: 'none',

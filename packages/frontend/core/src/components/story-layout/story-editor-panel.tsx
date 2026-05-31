@@ -28,6 +28,7 @@ interface StoryEditorPanelProps {
   focusMode: boolean;
   onFocusToggle: () => void;
   onSendToChat: (prompt: string) => void;
+  onDirtyChange?: (dirty: boolean, chapterId: string) => void;
   theme: {
     background: string;
     panel: string;
@@ -42,32 +43,32 @@ export const StoryEditorPanel = ({
   focusMode: _focusMode,
   onFocusToggle: _onFocusToggle,
   onSendToChat,
+  onDirtyChange,
   theme,
 }: StoryEditorPanelProps) => {
   const {
     project,
     chapters,
-    activeChapterIndex,
+    activeChapterId,
     activeNovelId,
     novels,
-    volumes,
+    volumes: _volumes,
     updateChapterContent,
     error,
     getChapterStore,
   } = useStory();
 
-  const activeChapter =
-    activeChapterIndex !== null
-      ? chapters.find(ch => ch.meta.index === activeChapterIndex)
-      : null;
+  const activeChapter = activeChapterId
+    ? (chapters.find(ch => ch.meta.id === activeChapterId) ?? null)
+    : null;
 
-  const activeChapterStore =
-    activeChapterIndex !== null ? getChapterStore(activeChapterIndex) : null;
+  const activeChapterStore = activeChapterId
+    ? getChapterStore(activeChapterId)
+    : null;
 
   const [editorContent, setEditorContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (activeChapter) {
@@ -83,50 +84,66 @@ export const StoryEditorPanel = ({
       try {
         await updateChapterContent(content, meta);
         setDirty(false);
+        if (activeChapterId) {
+          onDirtyChange?.(false, activeChapterId);
+        }
       } finally {
         setSaving(false);
       }
     },
-    [updateChapterContent]
+    [updateChapterContent, activeChapterId, onDirtyChange]
   );
 
   const handleContentChange = useCallback(
     (value: string) => {
       setEditorContent(value);
       setDirty(true);
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-      debounceTimerRef.current = setTimeout(async () => {
-        await handleSave(value);
-      }, 1000);
+      if (activeChapterId) onDirtyChange?.(true, activeChapterId);
     },
-    [handleSave]
+    [activeChapterId, onDirtyChange]
   );
 
   const handleBlockSuiteContentChange = useCallback(
-    (data: { content: string; title: string; wordCount: number }) => {
+    (_data: { content: string; title: string; wordCount: number }) => {
       setDirty(true);
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-      debounceTimerRef.current = setTimeout(async () => {
-        await handleSave(data.content, {
-          title: data.title,
-          wordCount: data.wordCount,
-        });
-      }, 1000);
+      if (activeChapterId) onDirtyChange?.(true, activeChapterId);
     },
-    [handleSave]
+    [activeChapterId, onDirtyChange]
   );
 
+  // Cmd+S / Ctrl+S to save
   useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        if (!dirty) return;
+        if (activeChapterStore) {
+          // Extract content from BlockSuite store
+          const store = activeChapterStore;
+          const root = store.root;
+          if (!root) return;
+          const titleText = (root as any).title?.toString?.() ?? '';
+          let wordCount = 0;
+          const parts: string[] = [];
+          for (const model of store.getAllModels()) {
+            if ((model as any).text) {
+              const text = (model as any).text.toString();
+              const chineseChars = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
+              const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
+              wordCount += chineseChars + englishWords;
+              parts.push(text);
+            }
+          }
+          const content = parts.join('\n');
+          handleSave(content, { title: titleText, wordCount }).catch(() => {});
+        } else {
+          handleSave(editorContent).catch(() => {});
+        }
       }
     };
-  }, []);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [dirty, activeChapterStore, editorContent, handleSave]);
 
   if (!project) {
     return (
@@ -257,13 +274,14 @@ export const StoryEditorPanel = ({
             {(() => {
               const novel = novels.find(n => n.id === activeNovelId);
               const parts = [novel?.title ?? ''];
-              const vol = activeChapter?.meta
-                ? volumes?.find(_v =>
-                    chapters.some(ch => ch.meta.index === activeChapterIndex)
-                  )
-                : null;
-              if (vol) parts.push(vol.title);
-              parts.push(activeChapter?.meta?.title ?? '');
+              // Find parent chapter for breadcrumb (long novel: parent is volume-like)
+              if (activeChapter?.meta?.parentId) {
+                const parent = chapters.find(
+                  ch => ch.meta.id === activeChapter.meta.parentId
+                );
+                if (parent) parts.push(parent.meta.title || '章节');
+              }
+              parts.push(activeChapter?.meta?.title || '章节');
               return parts.filter(Boolean).join(' / ');
             })()}
           </span>
@@ -390,6 +408,7 @@ function AffineEditorWrapper({
   const hostRef = useRef<EditorHost | null>(null);
   const popupAbortRef = useRef<AbortController | null>(null);
   const popupOpenRef = useRef(false);
+  const popupOpenTimeRef = useRef(0);
   const slashTriggeredRef = useRef(false);
   const savedRangeRef = useRef<Range | null>(null);
 
@@ -468,6 +487,12 @@ function AffineEditorWrapper({
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false;
+    let initialized = false;
+
+    // Skip events from the initial block creation (page, surface, note, paragraph)
+    const initTimer = setTimeout(() => {
+      initialized = true;
+    }, 1500);
 
     const extractAndNotify = () => {
       if (disposed) return;
@@ -498,12 +523,14 @@ function AffineEditorWrapper({
     };
 
     const sub = store.slots.blockUpdated.subscribe(() => {
+      if (!initialized) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(extractAndNotify, 800);
     });
 
     return () => {
       disposed = true;
+      clearTimeout(initTimer);
       sub.unsubscribe();
       if (timer) clearTimeout(timer);
     };
@@ -611,6 +638,7 @@ function AffineEditorWrapper({
 
       closePopup();
       popupOpenRef.current = true;
+      popupOpenTimeRef.current = Date.now();
 
       const textSelection = host.selection.find(TextSelection);
       const blockSelections = host.selection.filter(BlockSelection);
@@ -651,77 +679,58 @@ function AffineEditorWrapper({
     [handlePopupSend, handlePopupClose, closePopup]
   );
 
-  // ── Trigger 1: Text selection → popup (debounced) ────────
-  // Debounce to avoid popup flickering during drag-selection and
-  // to prevent closeOnClickAway from eating the mouseup/click event.
+  // ── Trigger 1: mouseup with selected text → popup ────────
+  // Listen for left mouseup, then check if text is selected.
 
   useEffect(() => {
-    let lastSelectedText = '';
-    let wasOpen = false;
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const handleMouseUp = async (e: MouseEvent) => {
+      // Only left button
+      if (e.button !== 0) return;
+      // Don't trigger if popup is already open
+      if (popupOpenRef.current) return;
 
-    const handleSelectionChange = () => {
       const host = hostRef.current;
       if (!host) return;
 
-      // Only respond to selections inside the editor, not sidebar/AI panel/etc.
+      // Small delay to let the browser finalize the selection
+      await new Promise(r => setTimeout(r, 50));
+
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return;
       const range = sel.getRangeAt(0);
+      if (range.collapsed) return;
+
+      // Only respond to selections inside the editor
       const editorRoot = wrapperRef.current;
       if (!editorRoot || !editorRoot.contains(range.commonAncestorContainer))
         return;
 
-      if (wasOpen && !popupOpenRef.current) {
-        lastSelectedText = '';
-        wasOpen = false;
-      }
-
       const text = sel.toString().trim();
+      if (!text) return;
 
-      if (!text) {
-        lastSelectedText = '';
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-          debounceTimer = null;
-        }
-        return;
+      let selectedText = text;
+      try {
+        const bsText = await getSelectedTextContent(host, 'plain-text');
+        if (bsText) selectedText = bsText;
+      } catch {
+        /* fallback */
       }
-      if (text === lastSelectedText) return;
-      lastSelectedText = text;
 
-      // Cancel previous pending popup
-      if (debounceTimer) clearTimeout(debounceTimer);
+      const chineseChars = (selectedText.match(/[一-鿿㐀-䶿]/g) || []).length;
+      const englishWords = (selectedText.match(/[a-zA-Z]+/g) || []).length;
+      const wordCount = chineseChars + englishWords;
 
-      debounceTimer = setTimeout(async () => {
-        debounceTimer = null;
+      const textSelection = host.selection.find(TextSelection);
+      const startIndex = textSelection?.from?.index ?? 0;
+      const endIndex =
+        textSelection?.to?.index ?? startIndex + selectedText.length;
 
-        let selectedText = text;
-        try {
-          const bsText = await getSelectedTextContent(host, 'plain-text');
-          if (bsText) selectedText = bsText;
-        } catch {
-          /* fallback */
-        }
-
-        const chineseChars = (selectedText.match(/[一-鿿㐀-䶿]/g) || []).length;
-        const englishWords = (selectedText.match(/[a-zA-Z]+/g) || []).length;
-        const wordCount = chineseChars + englishWords;
-
-        const textSelection = host.selection.find(TextSelection);
-        const startIndex = textSelection?.from?.index ?? 0;
-        const endIndex =
-          textSelection?.to?.index ?? startIndex + selectedText.length;
-
-        wasOpen = true;
-        showPopup(selectedText, wordCount, startIndex, endIndex);
-      }, 300);
+      showPopup(selectedText, wordCount, startIndex, endIndex);
     };
 
-    document.addEventListener('selectionchange', handleSelectionChange);
+    document.addEventListener('mouseup', handleMouseUp);
     return () => {
-      document.removeEventListener('selectionchange', handleSelectionChange);
-      if (debounceTimer) clearTimeout(debounceTimer);
+      document.removeEventListener('mouseup', handleMouseUp);
     };
   }, [showPopup]);
 

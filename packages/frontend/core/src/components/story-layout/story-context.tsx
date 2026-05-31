@@ -17,14 +17,35 @@ import React, {
 } from 'react';
 
 import { loadSession, saveSession } from './session-storage';
+import { useWorkspace } from './workspace-provider';
 
-// Legacy chapter meta used internally by ChapterContent
+function countWords(text: string): number {
+  const chineseChars = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
+  const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
+  return chineseChars + englishWords;
+}
+
+async function storyIPC<T = void>(
+  method: string,
+  ...args: any[]
+): Promise<T | null> {
+  try {
+    const { apis } = await import('@affine/electron-api');
+    const fn = (apis as any)?.story?.[method];
+    if (!fn) return null;
+    return fn(...args);
+  } catch {
+    return null;
+  }
+}
+
 interface LegacyChapterMeta {
-  index: number;
+  id: string;
   title: string;
   wordCount: number;
   createdAt: string;
   updatedAt: string;
+  parentId: string | null;
 }
 
 export interface ChapterContent {
@@ -90,7 +111,7 @@ export interface ChatSession {
 
 export interface SessionState {
   activeNovelId: string;
-  activeChapterIndex: number;
+  activeChapterId: string;
   aiPanelOpen: boolean;
   aiPanelWidth: number;
   activeAiTab: 'chat' | 'continue' | 'polish' | 'analyze' | 'explain';
@@ -116,7 +137,7 @@ export interface NovelProject {
 export interface StoryState {
   project: NovelProject | null;
   chapters: ChapterContent[];
-  activeChapterIndex: number | null;
+  activeChapterId: string;
   activeModule: string;
   loading: boolean;
   error: string | null;
@@ -139,15 +160,19 @@ interface StoryActions {
     },
     workspacePath: string
   ) => Promise<void>;
-  addChapter: (title: string, content: string) => Promise<void>;
-  selectChapter: (index: number) => Promise<void>;
+  addChapter: (
+    title: string,
+    content: string,
+    parentId?: string | null
+  ) => Promise<void>;
+  selectChapter: (id: string) => Promise<void>;
   updateChapterContent: (
     content: string,
     meta?: { title?: string; wordCount?: number }
   ) => Promise<void>;
-  deleteChapter: (index: number) => Promise<void>;
+  deleteChapter: (id: string) => Promise<void>;
   setActiveModule: (module: string) => void;
-  getChapterStore: (chapterIndex: number) => Store | null;
+  getChapterStore: (chapterId: string) => Store | null;
   // New multi-novel actions
   createNovel: (
     data: Omit<NovelMeta, 'id' | 'createdAt' | 'updatedAt'>
@@ -173,7 +198,6 @@ const StoryContext = createContext<StoryContextValue | null>(null);
 // Persistence keys
 const STORAGE_KEYS = {
   activeProjectId: 'story-active-project-id',
-  activeChapterIndex: 'story-active-chapter-index',
   projectMeta: 'story-project-meta',
   chaptersData: 'story-chapters-data',
   novels: 'story-novels',
@@ -236,17 +260,15 @@ export function useStory(): StoryContextValue {
 }
 
 export function StoryProvider({ children }: { children: ReactNode }) {
+  const { workspacePath } = useWorkspace();
   const [project, setProject] = useState<NovelProject | null>(() =>
     loadFromStorage<NovelProject>(STORAGE_KEYS.projectMeta)
   );
   const [chapters, setChapters] = useState<ChapterContent[]>(
     () => loadFromStorage<ChapterContent[]>(STORAGE_KEYS.chaptersData) ?? []
   );
-  const [activeChapterIndex, setActiveChapterIndex] = useState<number | null>(
-    () =>
-      loadSession()?.activeChapterIndex ??
-      loadFromStorage<number>(STORAGE_KEYS.activeChapterIndex) ??
-      null
+  const [activeChapterId, setActiveChapterId] = useState<string>(
+    () => loadSession()?.activeChapterId ?? ''
   );
   const [activeModule, setActiveModule] = useState('chapters');
   const [loading, setLoading] = useState(false);
@@ -303,10 +325,10 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   }, [activeNovelId, debouncedSaveSession]);
 
   useEffect(() => {
-    if (activeChapterIndex !== null) {
-      debouncedSaveSession({ activeChapterIndex });
+    if (activeChapterId) {
+      debouncedSaveSession({ activeChapterId });
     }
-  }, [activeChapterIndex, debouncedSaveSession]);
+  }, [activeChapterId, debouncedSaveSession]);
 
   useEffect(() => {
     if (activeChatSessionId) {
@@ -334,9 +356,31 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     }
   }, [project]);
 
+  // Load chapters from disk when novel changes
   useEffect(() => {
-    saveToStorage(STORAGE_KEYS.chaptersData, chapters);
-  }, [chapters]);
+    if (!workspacePath || !activeNovelId) {
+      setChapters([]);
+      return;
+    }
+    storyIPC<any[]>('listChapters', workspacePath, activeNovelId).then(
+      result => {
+        if (result) {
+          const loaded: ChapterContent[] = result.map((ch: any) => ({
+            meta: {
+              id: ch.meta.id,
+              title: ch.meta.title,
+              wordCount: countWords(ch.content),
+              createdAt: ch.meta.createdAt,
+              updatedAt: ch.meta.updatedAt,
+              parentId: ch.meta.parentId,
+            },
+            content: ch.content,
+          }));
+          setChapters(loaded);
+        }
+      }
+    );
+  }, [workspacePath, activeNovelId]);
 
   // Persist new state
   useEffect(() => {
@@ -351,15 +395,15 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     saveToStorage(STORAGE_KEYS.chatSessions, chatSessions);
   }, [chatSessions]);
 
-  const chapterStores = React.useMemo(() => new Map<number, Store>(), []);
+  const chapterStores = React.useMemo(() => new Map<string, Store>(), []);
 
   const getChapterStore = React.useCallback(
-    (chapterIndex: number): Store | null => {
-      const existing = chapterStores.get(chapterIndex);
+    (chapterId: string): Store | null => {
+      const existing = chapterStores.get(chapterId);
       if (existing) return existing;
       try {
-        const store = createChapterStore(`ch-${chapterIndex}`);
-        chapterStores.set(chapterIndex, store);
+        const store = createChapterStore(chapterId);
+        chapterStores.set(chapterId, store);
         return store;
       } catch (err) {
         console.error('Failed to create BlockSuite chapter store:', err);
@@ -398,7 +442,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         };
         setProject(newProject);
         setChapters([]);
-        setActiveChapterIndex(null);
+        setActiveChapterId('');
         saveToStorage(STORAGE_KEYS.activeProjectId, id);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -410,28 +454,34 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   );
 
   const addChapter = useCallback(
-    async (title: string, content: string) => {
-      if (!project) return;
+    async (title: string, content: string, parentId?: string | null) => {
+      if (!workspacePath || !activeNovelId) return;
       setLoading(true);
       setError(null);
       try {
-        // TODO(story): wire to Electron IPC → main process → @affine/story ChapterService
-        const index = chapters.length + 1;
+        const id = Date.now().toString();
         const now = new Date().toISOString();
+        // Write to disk
+        await storyIPC('writeChapter', workspacePath, activeNovelId, id, {
+          title,
+          content,
+          parentId: parentId ?? null,
+          createdAt: now,
+        });
         const newChapter: ChapterContent = {
           meta: {
-            index,
+            id,
             title,
-            wordCount: content.length,
+            wordCount: countWords(content),
             createdAt: now,
             updatedAt: now,
+            parentId: parentId ?? null,
           },
           content,
         };
         setChapters(prev => [...prev, newChapter]);
         if (chapters.length === 0) {
-          setActiveChapterIndex(index);
-          saveToStorage(STORAGE_KEYS.activeChapterIndex, index);
+          setActiveChapterId(id);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -439,31 +489,45 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     },
-    [project, chapters.length]
+    [workspacePath, activeNovelId, chapters.length]
   );
 
-  const selectChapter = useCallback(async (index: number) => {
-    setActiveChapterIndex(index);
+  const selectChapter = useCallback(async (id: string) => {
+    setActiveChapterId(id);
   }, []);
 
   const updateChapterContent = useCallback(
     async (content: string, meta?: { title?: string; wordCount?: number }) => {
-      if (activeChapterIndex === null) return;
+      if (!activeChapterId || !workspacePath || !activeNovelId) return;
       setError(null);
       try {
-        // TODO(story): wire to Electron IPC → main process → @affine/story ChapterService
+        const prev = chapters.find(ch => ch.meta.id === activeChapterId);
+        const title = meta?.title ?? prev?.meta.title ?? '';
+        const parentId = prev?.meta.parentId ?? null;
+        const createdAt = prev?.meta.createdAt;
+        // Write to disk
+        await storyIPC(
+          'writeChapter',
+          workspacePath,
+          activeNovelId,
+          activeChapterId,
+          {
+            title,
+            content,
+            parentId,
+            createdAt,
+          }
+        );
         setChapters(prev =>
           prev.map(ch =>
-            ch.meta.index === activeChapterIndex
+            ch.meta.id === activeChapterId
               ? {
                   ...ch,
                   content,
                   meta: {
                     ...ch.meta,
-                    ...(meta?.title !== undefined ? { title: meta.title } : {}),
-                    ...(meta?.wordCount !== undefined
-                      ? { wordCount: meta.wordCount }
-                      : {}),
+                    title: meta?.title ?? ch.meta.title,
+                    wordCount: meta?.wordCount ?? countWords(content),
                     updatedAt: new Date().toISOString(),
                   },
                 }
@@ -474,19 +538,39 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [activeChapterIndex]
+    [activeChapterId, workspacePath, activeNovelId, chapters]
   );
 
   const deleteChapter = useCallback(
-    async (index: number) => {
-      if (!project) return;
+    async (id: string) => {
+      if (!workspacePath || !activeNovelId) return;
       setLoading(true);
       setError(null);
       try {
-        // TODO(story): wire to Electron IPC → main process → @affine/story ChapterService
-        setChapters(prev => prev.filter(ch => ch.meta.index !== index));
-        if (activeChapterIndex === index) {
-          setActiveChapterIndex(null);
+        // Collect all descendant ids
+        const idsToDelete = new Set<string>();
+        idsToDelete.add(id);
+        let found = true;
+        while (found) {
+          found = false;
+          for (const ch of chapters) {
+            if (
+              ch.meta.parentId &&
+              idsToDelete.has(ch.meta.parentId) &&
+              !idsToDelete.has(ch.meta.id)
+            ) {
+              idsToDelete.add(ch.meta.id);
+              found = true;
+            }
+          }
+        }
+        // Delete from disk
+        for (const chId of idsToDelete) {
+          await storyIPC('deleteChapter', workspacePath, activeNovelId, chId);
+        }
+        setChapters(prev => prev.filter(ch => !idsToDelete.has(ch.meta.id)));
+        if (activeChapterId === id) {
+          setActiveChapterId('');
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -494,7 +578,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     },
-    [project, activeChapterIndex]
+    [workspacePath, activeNovelId, activeChapterId, chapters]
   );
 
   // --- New multi-novel CRUD actions ---
@@ -529,28 +613,24 @@ export function StoryProvider({ children }: { children: ReactNode }) {
 
   const switchNovel = useCallback((id: string) => {
     setActiveNovelId(id);
-    // Load volumes for the target novel (currently placeholder — volumes
-    // are stored per-novel in localStorage, keyed by novel id)
     const volumesKey = `story-volumes-${id}`;
     const loaded = loadFromStorage<Volume[]>(volumesKey) ?? [];
     setVolumes(loaded);
-    // Reset chapter selection when switching novels
-    setActiveChapterIndex(null);
+    setActiveChapterId('');
+    setChapters([]);
+    // Chapters will load from disk via the useEffect watching activeNovelId
   }, []);
 
   const deleteNovel = useCallback(
     (id: string) => {
       setNovels(prev => prev.filter(n => n.id !== id));
-      // Remove per-novel volumes from storage
       localStorage.removeItem(`story-volumes-${id}`);
-      // Clean up related chat sessions and todos
       setChatSessions(prev => prev.filter(s => s.novelId !== id));
       setTodos(prev => prev.filter(t => t.novelId !== id));
-      // If the deleted novel was active, reset
       if (activeNovelId === id) {
         setActiveNovelId('');
         setVolumes([]);
-        setActiveChapterIndex(null);
+        setActiveChapterId('');
       }
     },
     [activeNovelId]
@@ -566,7 +646,6 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       };
       const next = [...volumes, vol];
       setVolumes(next);
-      // Persist per-novel volumes
       saveToStorage(`story-volumes-${activeNovelId}`, next);
     },
     [activeNovelId, volumes]
@@ -615,7 +694,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     () => ({
       project,
       chapters,
-      activeChapterIndex,
+      activeChapterId,
       activeModule,
       loading,
       error,
@@ -649,7 +728,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     [
       project,
       chapters,
-      activeChapterIndex,
+      activeChapterId,
       activeModule,
       loading,
       error,
