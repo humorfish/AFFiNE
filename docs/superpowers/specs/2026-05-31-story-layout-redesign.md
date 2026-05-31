@@ -324,3 +324,74 @@ todos: TodoItem[]               // persisted globally in localStorage
 3. **One doc per chapter** — each chapter is an independent BlockSuite Store, lazily created and cached
 4. **Implicit mode** — no explicit "long/short novel" toggle; the presence of volumes determines the tree structure
 5. **Stub first, implement later** — top bar buttons (同步/统计/版本/导出) and AI tabs (续写/润色/分析/说人话) render as UI shells; actual functionality filled in incrementally
+
+## Session Persistence
+
+On every meaningful state change, persist a snapshot to localStorage. On app launch, restore from that snapshot so the user continues exactly where they left off.
+
+**Persisted state (single localStorage key `story-session`):**
+
+```typescript
+interface SessionState {
+  // Which novel and chapter were active
+  activeNovelId: string;
+  activeChapterIndex: number;
+
+  // AI panel state
+  aiPanelOpen: boolean;
+  aiPanelWidth: number; // 280-600, user's last drag position
+  activeAiTab: 'chat' | 'continue' | 'polish' | 'analyze' | 'explain';
+
+  // Chat session
+  activeChatSessionId: string; // resume existing conversation context
+
+  // Layout preferences
+  sidebarCollapsed: boolean;
+  chapterTreeExpandedVolumes: string[]; // which volumes were expanded
+
+  // Timestamp for debugging
+  savedAt: string;
+}
+```
+
+**When to save:**
+
+- Active novel changes (novel switcher)
+- Active chapter changes (click in tree)
+- AI panel open/close or width change
+- AI tab change
+- Chat session change (new chat, switch history)
+- Sidebar collapse/expand
+- Volume expand/collapse in chapter tree
+
+Debounced 500ms — batch rapid changes (e.g. dragging resize handle) into a single write.
+
+**On launch:**
+
+1. Read `story-session` from localStorage
+2. If present: restore all fields, load the active novel's chapters, switch to the saved chapter
+3. If the saved novelId no longer exists (deleted): fall back to first novel, or empty state
+4. If the saved chapterIndex is out of range: fall back to first chapter
+5. Restore AI chat session — reload messages from chat history by `activeChatSessionId`
+
+**Chat session persistence (separate key `story-chat-sessions`):**
+
+```typescript
+interface ChatSession {
+  id: string;
+  novelId: string;
+  title: string; // auto-generated from first message
+  messages: ChatMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+```
+
+All chat sessions stored as an array keyed by novel. Switching novels loads that novel's chat sessions. The `activeChatSessionId` in session state determines which conversation to display.
