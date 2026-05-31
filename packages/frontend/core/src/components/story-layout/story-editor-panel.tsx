@@ -66,6 +66,7 @@ export const StoryEditorPanel = ({
 
   const [editorContent, setEditorContent] = useState('');
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -76,22 +77,47 @@ export const StoryEditorPanel = ({
     }
   }, [activeChapter]);
 
+  const handleSave = useCallback(
+    async (content: string, meta?: { title?: string; wordCount?: number }) => {
+      setSaving(true);
+      try {
+        await updateChapterContent(content, meta);
+        setDirty(false);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [updateChapterContent]
+  );
+
   const handleContentChange = useCallback(
     (value: string) => {
       setEditorContent(value);
+      setDirty(true);
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
       debounceTimerRef.current = setTimeout(async () => {
-        setSaving(true);
-        try {
-          await updateChapterContent(value);
-        } finally {
-          setSaving(false);
-        }
+        await handleSave(value);
       }, 1000);
     },
-    [updateChapterContent]
+    [handleSave]
+  );
+
+  const handleBlockSuiteContentChange = useCallback(
+    (data: { content: string; title: string; wordCount: number }) => {
+      setDirty(true);
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      debounceTimerRef.current = setTimeout(async () => {
+        await handleSave(data.content, {
+          title: data.title,
+          wordCount: data.wordCount,
+        });
+      }, 1000);
+    },
+    [handleSave]
   );
 
   useEffect(() => {
@@ -250,6 +276,7 @@ export const StoryEditorPanel = ({
             flexShrink: 0,
           }}
         >
+          {dirty && !saving && <span style={{ color: '#f0a030' }}>未保存</span>}
           {saving && <span style={{ color: theme.textMuted }}>保存中...</span>}
           {error && <span style={{ color: '#ff6666' }}>保存失败</span>}
           {activeChapter?.meta?.wordCount !== undefined && (
@@ -265,6 +292,7 @@ export const StoryEditorPanel = ({
           <AffineEditorWrapper
             store={activeChapterStore}
             onSendToChat={onSendToChat}
+            onContentChange={handleBlockSuiteContentChange}
           />
         ) : (
           <div
@@ -347,9 +375,15 @@ function hideToolbarWidgets(root: Element | null) {
 function AffineEditorWrapper({
   store,
   onSendToChat,
+  onContentChange,
 }: {
   store: Store;
   onSendToChat: (prompt: string) => void;
+  onContentChange: (data: {
+    content: string;
+    title: string;
+    wordCount: number;
+  }) => void;
 }) {
   ensureInitialized();
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -429,6 +463,51 @@ function AffineEditorWrapper({
     setTimeout(() => hideToolbarWidgets(wrapperRef.current), 500);
     return () => clearInterval(interval);
   }, []);
+
+  // Debounced content extraction on BlockSuite store changes
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+
+    const extractAndNotify = () => {
+      if (disposed) return;
+      try {
+        const root = store.root;
+        if (!root) return;
+
+        const titleText = (root as any).title?.toString?.() ?? '';
+
+        let wordCount = 0;
+        const parts: string[] = [];
+        const allModels = store.getAllModels();
+        for (const model of allModels) {
+          if ((model as any).text) {
+            const text = (model as any).text.toString();
+            const chineseChars = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
+            const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
+            wordCount += chineseChars + englishWords;
+            parts.push(text);
+          }
+        }
+        const content = parts.join('\n');
+
+        onContentChange({ content, title: titleText, wordCount });
+      } catch (e) {
+        console.warn('[StoryAI] content extraction failed:', e);
+      }
+    };
+
+    const sub = store.slots.blockUpdated.subscribe(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(extractAndNotify, 800);
+    });
+
+    return () => {
+      disposed = true;
+      sub.unsubscribe();
+      if (timer) clearTimeout(timer);
+    };
+  }, [store, onContentChange]);
 
   // ── Popup lifecycle ──────────────────────────────────────
 
