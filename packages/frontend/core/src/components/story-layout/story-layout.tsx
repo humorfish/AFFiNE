@@ -19,7 +19,7 @@ import { StoryEditorPanel } from './story-editor-panel';
 import { StoryFrameworkRoot } from './story-framework';
 import { StoryNovelSwitcher } from './story-novel-switcher';
 import { StoryResizeHandle } from './story-resize-handle';
-import StoryTodoPanel from './story-todo-panel';
+import { StoryTodoPanel } from './story-todo-panel';
 import { StoryTopBar } from './story-top-bar';
 import { WorkspaceProvider } from './workspace-provider';
 

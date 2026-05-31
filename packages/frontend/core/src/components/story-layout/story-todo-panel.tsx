@@ -1,5 +1,4 @@
-import { cssVar, styled } from '@affine/component';
-import React, { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface TodoItem {
   id: string;
@@ -18,138 +17,7 @@ interface StoryTodoPanelProps {
   onDeleteTodo: (id: string) => void;
 }
 
-const StyledPanel = styled('div')<{
-  top: number;
-  left: number;
-}>(({ top, left }) => ({
-  position: 'fixed',
-  top: `${top}px`,
-  left: `${left}px`,
-  zIndex: 100,
-  width: '320px',
-  maxHeight: '400px',
-  background: cssVar('affine-background-secondary-color'),
-  border: `1px solid ${cssVar('affine-border-color')}`,
-  borderRadius: '8px',
-  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-  overflowY: 'auto',
-}));
-
-const Header = styled('div')({
-  padding: '16px',
-  borderBottom: `1px solid ${cssVar('affine-border-color')}`,
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-});
-
-const Title = styled('div')({
-  fontSize: '14px',
-  fontWeight: '600',
-});
-
-const CountBadge = styled('div')({
-  background: cssVar('affine-background-primary-color'),
-  color: cssVar('affine-text-primary-color'),
-  padding: '2px 8px',
-  borderRadius: '12px',
-  fontSize: '12px',
-  minWidth: '20px',
-  textAlign: 'center',
-});
-
-const QuickAddRow = styled('div')({
-  padding: '12px 16px',
-  display: 'flex',
-  gap: '8px',
-});
-
-const TodoInput = styled('input')({
-  flex: 1,
-  padding: '8px 12px',
-  background: cssVar('affine-background-primary-color'),
-  border: `1px solid ${cssVar('affine-border-color')}`,
-  borderRadius: '6px',
-  fontSize: '14px',
-  outline: 'none',
-  '&:focus': {
-    borderColor: cssVar('affine-primary-color'),
-  },
-});
-
-const AddButton = styled('button')({
-  padding: '8px 16px',
-  background: cssVar('affine-primary-color'),
-  color: 'white',
-  border: 'none',
-  borderRadius: '6px',
-  fontSize: '14px',
-  cursor: 'pointer',
-  '&:hover': {
-    opacity: 0.9,
-  },
-});
-
-const TodoItemRow = styled('div')({
-  padding: '12px 16px',
-  display: 'flex',
-  alignItems: 'center',
-  gap: '8px',
-  '&:hover': {
-    background: cssVar('affine-background-primary-color'),
-  },
-});
-
-const TodoCheckbox = styled('input')({
-  width: '16px',
-  height: '16px',
-  cursor: 'pointer',
-});
-
-const TodoText =
-  styled('div', {
-    shouldForwardProp: prop => prop !== 'done',
-  }) <
-  { done: boolean }(({ done }) => ({
-    flex: 1,
-    fontSize: '14px',
-    color: cssVar('affine-text-primary-color'),
-    ...(done && {
-      textDecoration: 'line-through',
-      opacity: 0.5,
-    }),
-  }));
-
-const DeleteButton = styled('button')({
-  padding: '4px 8px',
-  background: 'transparent',
-  color: cssVar('affine-text-secondary-color'),
-  border: 'none',
-  borderRadius: '4px',
-  fontSize: '12px',
-  cursor: 'pointer',
-  '&:hover': {
-    background: cssVar('affine-background-error-color'),
-    color: 'white',
-  },
-});
-
-const Separator = styled('div')({
-  padding: '12px 16px',
-  fontSize: '12px',
-  color: cssVar('affine-text-secondary-color'),
-  fontWeight: '500',
-  borderBottom: `1px solid ${cssVar('affine-border-color')}`,
-});
-
-const EmptyState = styled('div')({
-  padding: '32px 16px',
-  textAlign: 'center',
-  color: cssVar('affine-text-tertiary-color'),
-  fontSize: '14px',
-});
-
-const StoryTodoPanel: React.FC<StoryTodoPanelProps> = ({
+export const StoryTodoPanel = ({
   open,
   onClose,
   anchorEl,
@@ -157,7 +25,7 @@ const StoryTodoPanel: React.FC<StoryTodoPanelProps> = ({
   onAddTodo,
   onToggleTodo,
   onDeleteTodo,
-}) => {
+}: StoryTodoPanelProps) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const [inputValue, setInputValue] = useState('');
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -168,15 +36,12 @@ const StoryTodoPanel: React.FC<StoryTodoPanelProps> = ({
   useEffect(() => {
     if (open && anchorEl) {
       const rect = anchorEl.getBoundingClientRect();
-      const top = rect.bottom + window.scrollY;
-      const left = rect.left + window.scrollX;
-      setPosition({ top, left });
+      setPosition({ top: rect.bottom + 4, left: rect.left });
     }
   }, [open, anchorEl]);
 
   useEffect(() => {
     if (!open) return;
-
     const handleClickOutside = (event: MouseEvent) => {
       if (
         panelRef.current &&
@@ -185,97 +50,202 @@ const StoryTodoPanel: React.FC<StoryTodoPanelProps> = ({
         onClose();
       }
     };
-
     const handleEscapeKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
+      if (event.key === 'Escape') onClose();
     };
-
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleEscapeKey);
-
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEscapeKey);
     };
   }, [open, onClose]);
 
-  const handleAddTodo = () => {
+  const handleAddTodo = useCallback(() => {
     if (inputValue.trim()) {
       onAddTodo(inputValue.trim());
       setInputValue('');
     }
-  };
-
-  const handleKeyPress = (event: React.KeyboardEvent) => {
-    if (event.key === 'Enter') {
-      handleAddTodo();
-    }
-  };
+  }, [inputValue, onAddTodo]);
 
   if (!open) return null;
 
   return (
-    <StyledPanel ref={panelRef} top={position.top} left={position.left}>
-      <Header>
-        <Title>📋 待办事项</Title>
+    <div
+      ref={panelRef}
+      style={{ ...styles.panel, top: position.top, left: position.left }}
+    >
+      <div style={styles.header}>
+        <span style={styles.title}>📋 待办事项</span>
         {pendingTodos.length > 0 && (
-          <CountBadge>{pendingTodos.length}</CountBadge>
+          <span style={styles.badge}>{pendingTodos.length}</span>
         )}
-      </Header>
+      </div>
 
-      <QuickAddRow>
-        <TodoInput
+      <div style={styles.inputRow}>
+        <input
           type="text"
-          placeholder="添加待办..."
+          placeholder="快速记录..."
           value={inputValue}
           onChange={e => setInputValue(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleAddTodo();
+          }}
+          style={styles.input}
+          autoFocus
         />
-        <AddButton onClick={handleAddTodo}>添加</AddButton>
-      </QuickAddRow>
+        <button onClick={handleAddTodo} style={styles.addButton}>
+          添加
+        </button>
+      </div>
 
-      {pendingTodos.length > 0 && (
-        <>
-          {pendingTodos.map(todo => (
-            <TodoItemRow key={todo.id}>
-              <TodoCheckbox
-                type="checkbox"
-                checked={false}
-                onChange={() => onToggleTodo(todo.id)}
-              />
-              <TodoText done={todo.done}>{todo.text}</TodoText>
-              <DeleteButton onClick={() => onDeleteTodo(todo.id)}>
-                ×
-              </DeleteButton>
-            </TodoItemRow>
-          ))}
-        </>
-      )}
+      {pendingTodos.map(todo => (
+        <div key={todo.id} style={styles.todoItem}>
+          <input
+            type="checkbox"
+            checked={false}
+            onChange={() => onToggleTodo(todo.id)}
+            style={styles.checkbox}
+          />
+          <span style={{ flex: 1, fontSize: 14 }}>{todo.text}</span>
+          <button
+            onClick={() => onDeleteTodo(todo.id)}
+            style={styles.deleteButton}
+          >
+            ×
+          </button>
+        </div>
+      ))}
 
       {doneTodos.length > 0 && (
         <>
-          <Separator>已完成 ({doneTodos.length})</Separator>
+          <div style={styles.separator}>已完成 ({doneTodos.length})</div>
           {doneTodos.map(todo => (
-            <TodoItemRow key={todo.id}>
-              <TodoCheckbox
+            <div key={todo.id} style={styles.todoItem}>
+              <input
                 type="checkbox"
-                checked={true}
+                checked
                 onChange={() => onToggleTodo(todo.id)}
+                style={styles.checkbox}
               />
-              <TodoText done={todo.done}>{todo.text}</TodoText>
-              <DeleteButton onClick={() => onDeleteTodo(todo.id)}>
+              <span
+                style={{
+                  flex: 1,
+                  fontSize: 14,
+                  textDecoration: 'line-through',
+                  opacity: 0.5,
+                }}
+              >
+                {todo.text}
+              </span>
+              <button
+                onClick={() => onDeleteTodo(todo.id)}
+                style={styles.deleteButton}
+              >
                 ×
-              </DeleteButton>
-            </TodoItemRow>
+              </button>
+            </div>
           ))}
         </>
       )}
 
-      {todos.length === 0 && <EmptyState>还没有待办事项</EmptyState>}
-    </StyledPanel>
+      {todos.length === 0 && <div style={styles.empty}>还没有待办事项</div>}
+    </div>
   );
 };
 
-export default StoryTodoPanel;
+const styles: Record<string, React.CSSProperties> = {
+  panel: {
+    position: 'fixed',
+    zIndex: 100,
+    width: 320,
+    maxHeight: 400,
+    background: 'var(--affine-background-secondary-color, #16162a)',
+    border: '1px solid var(--affine-border-color)',
+    borderRadius: 8,
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  header: {
+    padding: '12px 16px',
+    borderBottom: '1px solid var(--affine-border-color)',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  title: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: 'var(--affine-text-primary-color)',
+  },
+  badge: {
+    background: 'var(--affine-primary-color, #6c5ce7)',
+    color: '#fff',
+    padding: '2px 8px',
+    borderRadius: 12,
+    fontSize: 12,
+    minWidth: 20,
+    textAlign: 'center',
+  },
+  inputRow: {
+    padding: '8px 12px',
+    display: 'flex',
+    gap: 8,
+  },
+  input: {
+    flex: 1,
+    padding: '6px 10px',
+    background: 'var(--affine-background-primary-color)',
+    border: '1px solid var(--affine-border-color)',
+    borderRadius: 6,
+    color: 'var(--affine-text-primary-color)',
+    fontSize: 13,
+    outline: 'none',
+  },
+  addButton: {
+    padding: '6px 14px',
+    background: 'var(--affine-primary-color, #6c5ce7)',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 6,
+    fontSize: 13,
+    cursor: 'pointer',
+  },
+  todoItem: {
+    padding: '8px 16px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    color: 'var(--affine-text-primary-color)',
+  },
+  checkbox: {
+    width: 16,
+    height: 16,
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  deleteButton: {
+    padding: '2px 6px',
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--affine-text-secondary-color)',
+    cursor: 'pointer',
+    fontSize: 14,
+    lineHeight: 1,
+  },
+  separator: {
+    padding: '8px 16px',
+    fontSize: 12,
+    color: 'var(--affine-text-secondary-color)',
+    fontWeight: 500,
+    borderTop: '1px solid var(--affine-border-color)',
+  },
+  empty: {
+    padding: '24px 16px',
+    textAlign: 'center',
+    color: 'var(--affine-text-secondary-color)',
+    fontSize: 14,
+  },
+};
