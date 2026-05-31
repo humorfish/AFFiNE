@@ -236,7 +236,10 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     () => loadFromStorage<ChapterContent[]>(STORAGE_KEYS.chaptersData) ?? []
   );
   const [activeChapterIndex, setActiveChapterIndex] = useState<number | null>(
-    () => loadFromStorage<number>(STORAGE_KEYS.activeChapterIndex)
+    () =>
+      loadSession()?.activeChapterIndex ??
+      loadFromStorage<number>(STORAGE_KEYS.activeChapterIndex) ??
+      null
   );
   const [activeModule, setActiveModule] = useState('chapters');
   const [loading, setLoading] = useState(false);
@@ -260,32 +263,28 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     () => loadSession()?.activeChatSessionId ?? ''
   );
 
-  // Debounced session save timer
-  const sessionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // --- Session restore on mount ---
+  // Load volumes on mount when activeNovelId is present
   useEffect(() => {
-    const session = loadSession();
-    if (session) {
-      if (session.activeNovelId) {
-        setActiveNovelId(session.activeNovelId);
-      }
-      if (session.activeChapterIndex !== undefined) {
-        setActiveChapterIndex(session.activeChapterIndex);
-      }
-      if (session.activeChatSessionId) {
-        setActiveChatSessionId(session.activeChatSessionId);
-      }
+    const novelId = loadSession()?.activeNovelId;
+    if (novelId) {
+      const volumesKey = `story-volumes-${novelId}`;
+      setVolumes(loadFromStorage<Volume[]>(volumesKey) ?? []);
     }
   }, []);
 
+  // Debounced session save timer
+  const sessionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestSessionPartial = useRef<Partial<SessionState>>({});
+
   // --- Debounced session persistence ---
   const debouncedSaveSession = useCallback((partial: Partial<SessionState>) => {
+    latestSessionPartial.current = partial;
     if (sessionSaveTimer.current) {
       clearTimeout(sessionSaveTimer.current);
     }
     sessionSaveTimer.current = setTimeout(() => {
       saveSession(partial);
+      sessionSaveTimer.current = null;
     }, 500);
   }, []);
 
@@ -308,11 +307,13 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     }
   }, [activeChatSessionId, debouncedSaveSession]);
 
-  // Cleanup timer on unmount
+  // Cleanup timer on unmount — flush any pending save
   useEffect(() => {
     return () => {
       if (sessionSaveTimer.current) {
         clearTimeout(sessionSaveTimer.current);
+        saveSession(latestSessionPartial.current);
+        sessionSaveTimer.current = null;
       }
     };
   }, []);
@@ -434,7 +435,6 @@ export function StoryProvider({ children }: { children: ReactNode }) {
 
   const selectChapter = useCallback(async (index: number) => {
     setActiveChapterIndex(index);
-    saveToStorage(STORAGE_KEYS.activeChapterIndex, index);
   }, []);
 
   const updateChapterContent = useCallback(
@@ -475,7 +475,6 @@ export function StoryProvider({ children }: { children: ReactNode }) {
         setChapters(prev => prev.filter(ch => ch.meta.index !== index));
         if (activeChapterIndex === index) {
           setActiveChapterIndex(null);
-          saveToStorage(STORAGE_KEYS.activeChapterIndex, null);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -503,27 +502,25 @@ export function StoryProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const switchNovel = useCallback(
-    (id: string) => {
-      const novel = novels.find(n => n.id === id);
-      if (!novel) return;
-      setActiveNovelId(id);
-      // Load volumes for the target novel (currently placeholder — volumes
-      // are stored per-novel in localStorage, keyed by novel id)
-      const volumesKey = `story-volumes-${id}`;
-      const loaded = loadFromStorage<Volume[]>(volumesKey) ?? [];
-      setVolumes(loaded);
-      // Reset chapter selection when switching novels
-      setActiveChapterIndex(null);
-    },
-    [novels]
-  );
+  const switchNovel = useCallback((id: string) => {
+    setActiveNovelId(id);
+    // Load volumes for the target novel (currently placeholder — volumes
+    // are stored per-novel in localStorage, keyed by novel id)
+    const volumesKey = `story-volumes-${id}`;
+    const loaded = loadFromStorage<Volume[]>(volumesKey) ?? [];
+    setVolumes(loaded);
+    // Reset chapter selection when switching novels
+    setActiveChapterIndex(null);
+  }, []);
 
   const deleteNovel = useCallback(
     (id: string) => {
       setNovels(prev => prev.filter(n => n.id !== id));
       // Remove per-novel volumes from storage
       localStorage.removeItem(`story-volumes-${id}`);
+      // Clean up related chat sessions and todos
+      setChatSessions(prev => prev.filter(s => s.novelId !== id));
+      setTodos(prev => prev.filter(t => t.novelId !== id));
       // If the deleted novel was active, reset
       if (activeNovelId === id) {
         setActiveNovelId('');
