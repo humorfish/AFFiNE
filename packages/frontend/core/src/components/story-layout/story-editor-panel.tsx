@@ -40,7 +40,7 @@ interface StoryEditorPanelProps {
 
 export const StoryEditorPanel = ({
   focusMode,
-  onFocusToggle,
+  onFocusToggle: _onFocusToggle,
   onSendToChat,
   theme,
 }: StoryEditorPanelProps) => {
@@ -99,11 +99,6 @@ export const StoryEditorPanel = ({
     };
   }, []);
 
-  const wordCount = editorContent
-    ? (editorContent.match(/[一-鿿㐀-䶿]/g) || []).length +
-      (editorContent.match(/[a-zA-Z]+/g) || []).length
-    : 0;
-
   if (!project) {
     return (
       <div
@@ -158,28 +153,6 @@ export const StoryEditorPanel = ({
       >
         <div
           style={{
-            padding: '12px 24px',
-            borderBottom: `1px solid ${theme.border}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <span
-            style={{ color: theme.text, fontSize: '16px', fontWeight: 600 }}
-          >
-            {project.meta.title}
-          </span>
-          <button
-            onClick={onFocusToggle}
-            style={focusButtonStyle(focusMode, theme)}
-            title={focusMode ? '退出专注模式' : '进入专注模式'}
-          >
-            {focusMode ? '退出专注' : '专注模式'}
-          </button>
-        </div>
-        <div
-          style={{
             flex: 1,
             display: 'flex',
             alignItems: 'center',
@@ -206,31 +179,6 @@ export const StoryEditorPanel = ({
             )}
           </div>
         </div>
-        <div
-          style={{
-            borderTop: `1px solid ${theme.border}`,
-            padding: '8px 24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            fontSize: '13px',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '16px',
-              color: theme.textMuted,
-            }}
-          >
-            <span>共 {chapters.length} 章</span>
-            <span style={{ color: theme.border }}>|</span>
-            <span>
-              目标: {project.meta.wordCountTarget.toLocaleString()} 字
-            </span>
-          </div>
-        </div>
       </div>
     );
   }
@@ -245,35 +193,26 @@ export const StoryEditorPanel = ({
         background: theme.background,
       }}
     >
+      {/* Saving/error indicator */}
       <div
         style={{
-          padding: '12px 24px',
-          borderBottom: `1px solid ${theme.border}`,
+          padding: '6px 24px',
+          borderBottom: focusMode ? 'none' : `1px solid ${theme.border}`,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
+          gap: '12px',
+          minHeight: focusMode ? 0 : undefined,
         }}
       >
-        <span style={{ color: theme.text, fontSize: '16px', fontWeight: 600 }}>
-          {activeChapter.meta.title}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          {saving && (
-            <span style={{ color: theme.textMuted, fontSize: '12px' }}>
-              保存中...
-            </span>
-          )}
-          {error && (
-            <span style={{ color: '#ff6666', fontSize: '12px' }}>保存失败</span>
-          )}
-          <button
-            onClick={onFocusToggle}
-            style={focusButtonStyle(focusMode, theme)}
-            title={focusMode ? '退出专注模式' : '进入专注模式'}
-          >
-            {focusMode ? '退出专注' : '专注模式'}
-          </button>
-        </div>
+        {saving && (
+          <span style={{ color: theme.textMuted, fontSize: '12px' }}>
+            保存中...
+          </span>
+        )}
+        {error && (
+          <span style={{ color: '#ff6666', fontSize: '12px' }}>保存失败</span>
+        )}
       </div>
       <div
         className="affine-page-viewport"
@@ -313,29 +252,6 @@ export const StoryEditorPanel = ({
             />
           </div>
         )}
-      </div>
-      <div
-        style={{
-          borderTop: `1px solid ${theme.border}`,
-          padding: '8px 24px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontSize: '13px',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '16px',
-            color: theme.textMuted,
-          }}
-        >
-          <span>字数: {wordCount.toLocaleString()}</span>
-          <span style={{ color: theme.border }}>|</span>
-          <span>{activeChapter.meta.title}</span>
-        </div>
       </div>
     </div>
   );
@@ -721,20 +637,4 @@ function AffineEditorWrapper({
       />
     </div>
   );
-}
-
-function focusButtonStyle(
-  focusMode: boolean,
-  theme: { active: string; border: string; textMuted: string }
-): React.CSSProperties {
-  return {
-    padding: '4px 12px',
-    borderRadius: '4px',
-    border: `1px solid ${theme.border}`,
-    background: focusMode ? theme.active : 'transparent',
-    color: focusMode ? '#ffffff' : theme.textMuted,
-    cursor: 'pointer',
-    fontSize: '13px',
-    transition: 'background 0.15s, color 0.15s',
-  };
 }
