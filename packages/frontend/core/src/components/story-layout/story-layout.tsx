@@ -1,7 +1,7 @@
 /* eslint-disable rxjs/finnish */
 import './story-layout.css';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AIChatRuntime } from '../../blocksuite/ai/runtime/chat/runtime';
 import { WorkspaceAIChatSessionStrategy } from '../../blocksuite/ai/runtime/chat/session-strategy';
@@ -10,7 +10,7 @@ import { useAIChatRuntime } from '../../blocksuite/ai/runtime/chat/use-runtime';
 import { getStoryAIRequestService } from './ai/setup';
 import { NewNovelDialog } from './new-novel-dialog';
 import { PlaceholderDialog } from './placeholder-dialog';
-import { saveSession } from './session-storage';
+import { loadSession, saveSession } from './session-storage';
 import { SettingsDialog } from './settings-dialog';
 import { type AiTab, StoryAIPanel } from './story-ai-panel';
 import { StoryChapterTree } from './story-chapter-tree';
@@ -274,6 +274,46 @@ function StoryLayoutInner({
   }) => void;
   chatContainerRef: React.RefObject<HTMLDivElement>;
 }) {
+  const sessionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Session persistence effect
+  useEffect(() => {
+    if (sessionSaveTimer.current) clearTimeout(sessionSaveTimer.current);
+    sessionSaveTimer.current = setTimeout(() => {
+      saveSession({
+        aiPanelOpen,
+        aiPanelWidth,
+        activeAiTab,
+        sidebarCollapsed: false,
+        chapterTreeExpandedVolumes: expandedVolumes,
+      });
+    }, 500);
+    return () => {
+      if (sessionSaveTimer.current) {
+        clearTimeout(sessionSaveTimer.current);
+        // Flush final save
+        saveSession({
+          aiPanelOpen,
+          aiPanelWidth,
+          activeAiTab,
+          sidebarCollapsed: false,
+          chapterTreeExpandedVolumes: expandedVolumes,
+        });
+      }
+    };
+  }, [aiPanelOpen, aiPanelWidth, activeAiTab, expandedVolumes]);
+
+  // Session restore effect
+  useEffect(() => {
+    const session = loadSession();
+    if (!session) return;
+    if (session.aiPanelOpen !== undefined) setAiPanelOpen(session.aiPanelOpen);
+    if (session.aiPanelWidth) setAiPanelWidth(session.aiPanelWidth);
+    if (session.activeAiTab) setActiveAiTab(session.activeAiTab);
+    if (session.chapterTreeExpandedVolumes)
+      setExpandedVolumes(session.chapterTreeExpandedVolumes);
+  }, [setAiPanelOpen, setAiPanelWidth, setActiveAiTab, setExpandedVolumes]);
+
   const {
     novels,
     activeNovelId,
@@ -289,6 +329,27 @@ function StoryLayoutInner({
     toggleTodo,
     deleteTodo,
   } = useStory();
+
+  // Session persistence effect - save novel and chapter state
+  useEffect(() => {
+    if (sessionSaveTimer.current) clearTimeout(sessionSaveTimer.current);
+    sessionSaveTimer.current = setTimeout(() => {
+      saveSession({
+        activeNovelId,
+        activeChapterIndex: activeChapterIndex ?? -1,
+      });
+    }, 500);
+    return () => {
+      if (sessionSaveTimer.current) {
+        clearTimeout(sessionSaveTimer.current);
+        // Flush final save
+        saveSession({
+          activeNovelId,
+          activeChapterIndex: activeChapterIndex ?? -1,
+        });
+      }
+    };
+  }, [activeNovelId, activeChapterIndex]);
 
   const activeChapter =
     activeChapterIndex !== null
