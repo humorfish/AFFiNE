@@ -141,12 +141,19 @@ interface StoryActions {
   ) => Promise<void>;
   addChapter: (title: string, content: string) => Promise<void>;
   selectChapter: (index: number) => Promise<void>;
-  updateChapterContent: (content: string) => Promise<void>;
+  updateChapterContent: (
+    content: string,
+    meta?: { title?: string; wordCount?: number }
+  ) => Promise<void>;
   deleteChapter: (index: number) => Promise<void>;
   setActiveModule: (module: string) => void;
   getChapterStore: (chapterIndex: number) => Store | null;
   // New multi-novel actions
   createNovel: (
+    data: Omit<NovelMeta, 'id' | 'createdAt' | 'updatedAt'>
+  ) => void;
+  updateNovel: (
+    id: string,
     data: Omit<NovelMeta, 'id' | 'createdAt' | 'updatedAt'>
   ) => void;
   switchNovel: (id: string) => void;
@@ -422,8 +429,10 @@ export function StoryProvider({ children }: { children: ReactNode }) {
           content,
         };
         setChapters(prev => [...prev, newChapter]);
-        setActiveChapterIndex(index);
-        saveToStorage(STORAGE_KEYS.activeChapterIndex, index);
+        if (chapters.length === 0) {
+          setActiveChapterIndex(index);
+          saveToStorage(STORAGE_KEYS.activeChapterIndex, index);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -438,7 +447,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateChapterContent = useCallback(
-    async (content: string) => {
+    async (content: string, meta?: { title?: string; wordCount?: number }) => {
       if (activeChapterIndex === null) return;
       setError(null);
       try {
@@ -451,7 +460,10 @@ export function StoryProvider({ children }: { children: ReactNode }) {
                   content,
                   meta: {
                     ...ch.meta,
-                    wordCount: content.length,
+                    ...(meta?.title !== undefined ? { title: meta.title } : {}),
+                    ...(meta?.wordCount !== undefined
+                      ? { wordCount: meta.wordCount }
+                      : {}),
                     updatedAt: new Date().toISOString(),
                   },
                 }
@@ -498,6 +510,19 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       };
       setNovels(prev => [...prev, novel]);
       setActiveNovelId(novel.id);
+    },
+    []
+  );
+
+  const updateNovel = useCallback(
+    (id: string, data: Omit<NovelMeta, 'id' | 'createdAt' | 'updatedAt'>) => {
+      setNovels(prev =>
+        prev.map(n =>
+          n.id === id
+            ? { ...n, ...data, updatedAt: new Date().toISOString() }
+            : n
+        )
+      );
     },
     []
   );
@@ -611,6 +636,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       getChapterStore,
       // New actions
       createNovel,
+      updateNovel,
       switchNovel,
       deleteNovel,
       addVolume,
@@ -641,6 +667,7 @@ export function StoryProvider({ children }: { children: ReactNode }) {
       setActiveModule,
       getChapterStore,
       createNovel,
+      updateNovel,
       switchNovel,
       deleteNovel,
       addVolume,
