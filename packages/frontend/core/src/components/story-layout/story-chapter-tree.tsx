@@ -28,13 +28,9 @@ export interface StoryChapterTreeProps {
 }
 
 function formatWordCount(count: number): string {
-  if (count >= 10000) {
-    return `${(count / 10000).toFixed(1)}万字`;
-  }
-  if (count >= 1000) {
-    return `${Math.round(count / 1000)}千字`;
-  }
-  return `${count}字`;
+  if (count >= 10000) return `${(count / 10000).toFixed(1)}万`;
+  if (count >= 1000) return `${Math.round(count / 1000)}千`;
+  return `${count}`;
 }
 
 export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
@@ -50,14 +46,10 @@ export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
 }) => {
   const isTreeMode = volumes.length > 0;
 
-  // Group chapters by volumeId; ungrouped chapters go into a fallback list.
   const chaptersByVolume = useMemo(() => {
     const map = new Map<string, typeof chapters>();
     const ungrouped: typeof chapters = [];
-
-    for (const vol of volumes) {
-      map.set(vol.id, []);
-    }
+    for (const vol of volumes) map.set(vol.id, []);
     for (const ch of chapters) {
       if (ch.volumeId && map.has(ch.volumeId)) {
         map.get(ch.volumeId)?.push(ch);
@@ -68,7 +60,6 @@ export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
     return { map, ungrouped };
   }, [volumes, chapters]);
 
-  // Sort volumes by order, sort chapters within each volume by order.
   const sortedVolumes = useMemo(
     () => [...volumes].sort((a, b) => a.order - b.order),
     [volumes]
@@ -79,14 +70,12 @@ export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
     [chapters]
   );
 
-  // Build a lookup from chapter id to its sequential index for onSelectChapter.
   const chapterIndexLookup = useMemo(() => {
     const lookup = new Map<string, number>();
     sortedChapters.forEach((ch, idx) => lookup.set(ch.id, idx));
     return lookup;
   }, [sortedChapters]);
 
-  // Summary stats
   const totalWordCount = useMemo(
     () => chapters.reduce((sum, ch) => sum + ch.wordCount, 0),
     [chapters]
@@ -100,6 +89,67 @@ export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
     }
   };
 
+  const renderChapter = (ch: (typeof chapters)[0], indent = false) => {
+    const idx = chapterIndexLookup.get(ch.id) ?? -1;
+    const isActive = activeChapterIndex === idx;
+    return (
+      <div
+        key={ch.id}
+        onClick={() => onSelectChapter(idx)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '4px 8px',
+          paddingLeft: indent ? 24 : 8,
+          borderRadius: 4,
+          cursor: 'pointer',
+          margin: '1px 0',
+          fontSize: 12,
+          lineHeight: '22px',
+          color: isActive ? '#fff' : theme.textMuted,
+          background: isActive ? theme.active : 'transparent',
+          transition: 'background 0.12s, color 0.12s',
+          userSelect: 'none',
+        }}
+        onMouseEnter={e => {
+          if (!isActive) {
+            e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+            e.currentTarget.style.color = theme.text;
+          }
+        }}
+        onMouseLeave={e => {
+          if (!isActive) {
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.color = theme.textMuted;
+          }
+        }}
+      >
+        <span
+          style={{
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            flex: 1,
+            marginRight: 6,
+          }}
+        >
+          {isActive && <span style={{ marginRight: 4, opacity: 0.6 }}>←</span>}
+          {ch.title}
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            flexShrink: 0,
+            opacity: isActive ? 0.8 : 0.5,
+          }}
+        >
+          {ch.wordCount > 0 ? formatWordCount(ch.wordCount) : ''}
+        </span>
+      </div>
+    );
+  };
+
   return (
     <div
       style={{
@@ -109,83 +159,64 @@ export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
         background: theme.panel,
       }}
     >
-      {/* Header row */}
+      {/* Header */}
       <div
         style={{
-          padding: '10px 12px',
+          padding: '8px 10px',
           borderBottom: `1px solid ${theme.border}`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
         }}
       >
-        <span
-          style={{
-            color: theme.text,
-            fontSize: '13px',
-            fontWeight: 600,
-          }}
-        >
-          {'\u{1F4D6}'} 章节管理
+        <span style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted }}>
+          章节
         </span>
-        <div style={{ display: 'flex', gap: '4px' }}>
+        <div style={{ display: 'flex', gap: 2 }}>
           {isTreeMode && (
-            <button
-              onClick={onAddVolume}
-              title="新建卷"
-              style={iconBtnStyle(theme)}
-            >
-              {'\u{1F4C1}'}
+            <button onClick={onAddVolume} title="新建卷" style={iconBtn(theme)}>
+              📁
             </button>
           )}
           <button
             onClick={onAddChapter}
             title="新建章节"
-            style={iconBtnStyle(theme)}
+            style={iconBtn(theme)}
           >
             +
           </button>
         </div>
       </div>
 
-      {/* Scrollable list area */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '6px 8px',
-        }}
-      >
+      {/* Scrollable tree */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 6px' }}>
         {isTreeMode
-          ? // Tree mode: volumes containing chapters
-            sortedVolumes.map(vol => {
+          ? sortedVolumes.map(vol => {
               const volChapters = chaptersByVolume.map.get(vol.id) ?? [];
               const isExpanded = expandedVolumes.includes(vol.id);
-              const volWordCount = volChapters.reduce(
-                (sum, ch) => sum + ch.wordCount,
-                0
-              );
+              const volWC = volChapters.reduce((s, c) => s + c.wordCount, 0);
 
               return (
-                <div key={vol.id} style={{ marginBottom: '4px' }}>
-                  {/* Volume node */}
+                <div key={vol.id} style={{ marginBottom: 2 }}>
+                  {/* Volume header */}
                   <div
                     onClick={() => handleToggleVolume(vol.id)}
                     style={{
-                      padding: '6px 8px',
-                      fontWeight: 500,
-                      fontSize: '13px',
-                      color: theme.text,
-                      cursor: 'pointer',
-                      borderRadius: '4px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
+                      padding: '4px 6px',
+                      fontSize: 12,
+                      fontWeight: 500,
+                      color: theme.text,
+                      cursor: 'pointer',
+                      borderRadius: 4,
                       userSelect: 'none',
+                      lineHeight: '22px',
                     }}
                     onMouseEnter={e => {
                       e.currentTarget.style.background =
-                        'rgba(255,255,255,0.05)';
+                        'rgba(255,255,255,0.04)';
                     }}
                     onMouseLeave={e => {
                       e.currentTarget.style.background = 'transparent';
@@ -195,201 +226,79 @@ export const StoryChapterTree: React.FC<StoryChapterTreeProps> = ({
                       style={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '6px',
+                        gap: 4,
                       }}
                     >
-                      <span
-                        style={{ fontSize: '10px', color: theme.textMuted }}
-                      >
-                        {isExpanded ? '\u{25BC}' : '\u{25B6}'}
+                      <span style={{ fontSize: 9, color: theme.textMuted }}>
+                        {isExpanded ? '▼' : '▶'}
                       </span>
-                      {vol.title}
+                      <span style={{ fontSize: 11 }}>📁</span>
+                      <span>{vol.title}</span>
                     </span>
-                    <span style={{ fontSize: '11px', color: theme.textMuted }}>
-                      {volChapters.length}章
-                      {volWordCount > 0
-                        ? ` · ${formatWordCount(volWordCount)}`
+                    <span style={{ fontSize: 10, color: theme.textMuted }}>
+                      {volChapters.length > 0
+                        ? `${volChapters.length}章${volWC > 0 ? ` · ${formatWordCount(volWC)}` : ''}`
                         : ''}
                     </span>
                   </div>
 
-                  {/* Chapter nodes (indented) */}
+                  {/* Chapters under volume */}
                   {isExpanded &&
                     [...volChapters]
                       .sort((a, b) => a.order - b.order)
-                      .map(ch => {
-                        const idx = chapterIndexLookup.get(ch.id) ?? -1;
-                        const isActive = activeChapterIndex === idx;
-
-                        return (
-                          <div
-                            key={ch.id}
-                            onClick={() => onSelectChapter(idx)}
-                            style={{
-                              padding: '5px 8px',
-                              borderRadius: '4px',
-                              cursor: 'pointer',
-                              margin: '1px 0',
-                              marginLeft: '18px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              fontSize: '12px',
-                              color: isActive ? '#ffffff' : theme.textMuted,
-                              background: isActive
-                                ? theme.active
-                                : 'transparent',
-                              transition: 'background 0.15s, color 0.15s',
-                              userSelect: 'none',
-                            }}
-                            onMouseEnter={e => {
-                              if (!isActive) {
-                                e.currentTarget.style.background =
-                                  'rgba(255,255,255,0.05)';
-                                e.currentTarget.style.color = theme.text;
-                              }
-                            }}
-                            onMouseLeave={e => {
-                              if (!isActive) {
-                                e.currentTarget.style.background =
-                                  'transparent';
-                                e.currentTarget.style.color = theme.textMuted;
-                              }
-                            }}
-                          >
-                            <span
-                              style={{
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                flex: 1,
-                                marginRight: '8px',
-                              }}
-                            >
-                              {ch.title}
-                            </span>
-                            <span
-                              style={{
-                                fontSize: '11px',
-                                flexShrink: 0,
-                                opacity: isActive ? 0.8 : 0.6,
-                              }}
-                            >
-                              {formatWordCount(ch.wordCount)}
-                            </span>
-                          </div>
-                        );
-                      })}
+                      .map(ch => renderChapter(ch, true))}
                 </div>
               );
             })
-          : // Flat mode: simple chapter list
-            sortedChapters.map((ch, idx) => {
-              const isActive = activeChapterIndex === idx;
-
-              return (
-                <div
-                  key={ch.id}
-                  onClick={() => onSelectChapter(idx)}
-                  style={{
-                    padding: '5px 8px',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    margin: '1px 0',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    fontSize: '12px',
-                    color: isActive ? '#ffffff' : theme.textMuted,
-                    background: isActive ? theme.active : 'transparent',
-                    transition: 'background 0.15s, color 0.15s',
-                    userSelect: 'none',
-                  }}
-                  onMouseEnter={e => {
-                    if (!isActive) {
-                      e.currentTarget.style.background =
-                        'rgba(255,255,255,0.05)';
-                      e.currentTarget.style.color = theme.text;
-                    }
-                  }}
-                  onMouseLeave={e => {
-                    if (!isActive) {
-                      e.currentTarget.style.background = 'transparent';
-                      e.currentTarget.style.color = theme.textMuted;
-                    }
-                  }}
-                >
-                  <span
-                    style={{
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      flex: 1,
-                      marginRight: '8px',
-                    }}
-                  >
-                    {ch.title}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: '11px',
-                      flexShrink: 0,
-                      opacity: isActive ? 0.8 : 0.6,
-                    }}
-                  >
-                    {formatWordCount(ch.wordCount)}
-                  </span>
-                </div>
-              );
-            })}
+          : sortedChapters.map(ch => renderChapter(ch, false))}
 
         {chapters.length === 0 && (
           <div
             style={{
               color: theme.textMuted,
-              fontSize: '12px',
+              fontSize: 11,
               textAlign: 'center',
               padding: '20px 0',
-              opacity: 0.6,
+              opacity: 0.5,
             }}
           >
-            暂无章节
+            暂无章节，点击 + 新建
           </div>
         )}
       </div>
 
-      {/* Footer row */}
+      {/* Footer stats */}
       <div
         style={{
           borderTop: `1px solid ${theme.border}`,
-          padding: '6px 12px',
-          fontSize: '11px',
+          padding: '4px 10px',
+          fontSize: 10,
           color: theme.textMuted,
           textAlign: 'center',
           userSelect: 'none',
+          lineHeight: '18px',
         }}
       >
         {isTreeMode
-          ? `${volumes.length} 卷 · ${chapters.length} 章 · ${formatWordCount(totalWordCount)}`
-          : `${chapters.length} 章 · ${formatWordCount(totalWordCount)}`}
+          ? `${volumes.length} 卷 · ${chapters.length} 章${totalWordCount > 0 ? ` · ${formatWordCount(totalWordCount)}` : ''}`
+          : `${chapters.length} 章${totalWordCount > 0 ? ` · ${formatWordCount(totalWordCount)}` : ''}`}
       </div>
     </div>
   );
 };
 
-function iconBtnStyle(theme: {
+function iconBtn(theme: {
   border: string;
   textMuted: string;
 }): React.CSSProperties {
   return {
     background: 'transparent',
     border: 'none',
-    borderRadius: '4px',
+    borderRadius: 3,
     cursor: 'pointer',
-    padding: '2px 6px',
-    fontSize: '14px',
+    padding: '1px 4px',
+    fontSize: 13,
     color: theme.textMuted,
     lineHeight: 1,
-    transition: 'background 0.15s',
   };
 }

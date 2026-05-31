@@ -9,5 +9,5 @@ export { StoryEditorPanel } from './story-editor-panel';
 export { StoryLayout } from './story-layout';
 export { StoryNovelSwitcher } from './story-novel-switcher';
 export { StoryResizeHandle } from './story-resize-handle';
-export { default as StoryTodoPanel } from './story-todo-panel';
+export { StoryTodoPanel } from './story-todo-panel';
 export { StoryTopBar } from './story-top-bar';

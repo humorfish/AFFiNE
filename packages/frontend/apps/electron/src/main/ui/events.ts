@@ -1,12 +1,4 @@
 import type { MainEventRegister } from '../type';
-import {
-  type AuthenticationRequest,
-  onActiveTabChanged,
-  onTabAction,
-  onTabShellViewActiveChange,
-  onTabsStatusChange,
-  onTabViewsMetaChanged,
-} from '../windows-manager';
 import { uiSubjects } from './subject';
 
 /**
@@ -25,31 +17,8 @@ export const uiEvents = {
       sub.unsubscribe();
     };
   },
-  onTabViewsMetaChanged,
-  onTabAction,
-  onToggleRightSidebar: (fn: (tabId: string) => void) => {
-    const sub = uiSubjects.onToggleRightSidebar$.subscribe(fn);
-    return () => {
-      sub.unsubscribe();
-    };
-  },
-  onTabsStatusChange,
-  onActiveTabChanged,
-  onTabGoToRequest: (fn: (opts: { tabId: string; to: string }) => void) => {
-    const sub = uiSubjects.tabGoToRequest$.subscribe(fn);
-    return () => {
-      sub.unsubscribe();
-    };
-  },
-  onTabShellViewActiveChange,
-  onAuthenticationRequest: (fn: (state: AuthenticationRequest) => void) => {
+  onAuthenticationRequest: (fn: (state: any) => void) => {
     const sub = uiSubjects.authenticationRequest$.subscribe(fn);
-    return () => {
-      sub.unsubscribe();
-    };
-  },
-  onCloseView: (fn: () => void) => {
-    const sub = uiSubjects.onCloseView$.subscribe(fn);
     return () => {
       sub.unsubscribe();
     };

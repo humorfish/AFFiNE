@@ -6,9 +6,7 @@ import { buildType, isDev } from './config';
 import { logger } from './logger';
 import { uiSubjects } from './ui';
 import {
-  addTabWithUrl,
   getMainWindow,
-  loadUrlInActiveTab,
   openUrlInHiddenWindow,
   showMainWindow,
 } from './windows-manager';
@@ -102,21 +100,13 @@ async function handleAffineUrl(url: string) {
       payload,
       server,
     });
-  } else if (
-    urlObj.searchParams.get('new-tab') &&
-    urlObj.pathname.startsWith('/workspace')
-  ) {
-    // @todo(@forehalo): refactor router utilities
-    // basename of /workspace/xxx/yyy is /workspace/xxx
-    await addTabWithUrl(url);
   } else {
     const hiddenWindow = urlObj.searchParams.get('hidden')
       ? await openUrlInHiddenWindow(urlObj)
-      : await loadUrlInActiveTab(url);
+      : undefined;
 
     const main = await getMainWindow();
     if (main && hiddenWindow) {
-      // when hidden window closed, the main window will be hidden somehow
       hiddenWindow.on('close', () => {
         main.show();
       });

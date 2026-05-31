@@ -2,7 +2,6 @@
 // TODO(story): cloud removed - typecheck disabled
 import { configureElectronStateStorageImpls } from '@affine/core/desktop/storage';
 import { configureCommonModules } from '@affine/core/modules';
-import { configureAppTabsHeaderModule } from '@affine/core/modules/app-tabs-header';
 import { configureDesktopBackupModule } from '@affine/core/modules/backup';
 import { ValidatorProvider } from '@affine/core/modules/cloud';
 import {
@@ -28,7 +27,6 @@ export function setupModules() {
   configureElectronStateStorageImpls(framework);
   configureBrowserWorkspaceFlavours(framework);
   configureDesktopWorkbenchModule(framework);
-  configureAppTabsHeaderModule(framework);
   configureFindInPageModule(framework);
   configureDesktopApiModule(framework);
   configureSpellCheckSettingModule(framework);

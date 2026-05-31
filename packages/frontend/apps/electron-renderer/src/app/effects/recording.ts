@@ -304,13 +304,8 @@ export function setupRecordingEvents(frameworkProvider: FrameworkProvider) {
 
     isProcessingImport = true;
     try {
-      let isActiveTab = false;
-      try {
-        isActiveTab = !!(await apis?.ui.isActiveTab());
-      } catch (error) {
-        logger.error('Failed to probe active recording tab', error);
-        return;
-      }
+      // Single window mode — always active
+      const isActiveTab = true;
 
       if (!isActiveTab) {
         return;

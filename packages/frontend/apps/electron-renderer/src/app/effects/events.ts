@@ -4,7 +4,7 @@ import { DocsService } from '@affine/core/modules/doc';
 import { JournalService } from '@affine/core/modules/journal';
 import { LifecycleService } from '@affine/core/modules/lifecycle';
 import { WorkbenchService } from '@affine/core/modules/workbench';
-import { apis, events } from '@affine/electron-api';
+import { events } from '@affine/electron-api';
 import type { FrameworkProvider } from '@toeverything/infra';
 
 import { setupRecordingEvents } from './recording';
@@ -33,12 +33,9 @@ export function setupEvents(frameworkProvider: FrameworkProvider) {
   });
 
   events?.applicationMenu.onNewPageAction(type => {
-    apis?.ui
-      .isActiveTab()
-      .then(isActive => {
-        if (!isActive) {
-          return;
-        }
+    // Single window mode — always active
+    Promise.resolve(true)
+      .then(() => {
         using currentWorkspace = getCurrentWorkspace(frameworkProvider);
         if (!currentWorkspace) {
           return;

@@ -1,7 +1,51 @@
 /* Story layout global styles */
 
-/* Hide BlockSuite's format toolbar — also hidden programmatically in AffineEditorWrapper
-   (CSS can't reach into shadow DOM, so this is a belt-and-suspenders approach) */
+/* Hide BlockSuite's format toolbar */
 affine-toolbar-widget {
   display: none !important;
+}
+
+/* Sparkle shimmer for the create-novel button */
+@keyframes story-shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.story-create-novel-btn {
+  background: linear-gradient(
+    110deg,
+    #c6a700 0%,
+    #ffd700 20%,
+    #fff7cc 35%,
+    #ffd700 50%,
+    #c6a700 65%,
+    #ffd700 80%,
+    #c6a700 100%
+  ) !important;
+  background-size: 200% 100% !important;
+  animation: story-shimmer 2.5s ease-in-out infinite !important;
+  color: #1a1a2e !important;
+  text-shadow: 0 0 2px rgba(255, 215, 0, 0.3) !important;
+  border: 1px solid rgba(255, 215, 0, 0.5) !important;
+  box-shadow:
+    0 0 8px rgba(255, 215, 0, 0.4),
+    0 0 20px rgba(255, 215, 0, 0.15) !important;
+}
+
+.story-create-novel-btn:hover {
+  box-shadow:
+    0 0 12px rgba(255, 215, 0, 0.6),
+    0 0 30px rgba(255, 215, 0, 0.25) !important;
+}
+
+/* Fix block-diff-playground FAB: ensure it's visible in editor bottom-right */
+affine-block-diff-playground .playground-fab {
+  position: fixed !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  z-index: 9999 !important;
 }

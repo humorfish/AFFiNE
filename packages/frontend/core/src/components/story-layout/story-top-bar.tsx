@@ -1,198 +1,243 @@
 export interface StoryTopBarProps {
   activeNovel: { title: string } | null;
-  activeChapterTitle: string;
+  hasNovels: boolean;
   activeNavId: string | null;
   onNavClick: (id: string) => void;
+  onNovelAction: () => void;
   focusMode: boolean;
   onFocusToggle: () => void;
   aiPanelOpen: boolean;
   onAiPanelToggle: () => void;
+  sidebarCollapsed: boolean;
+  onSidebarToggle: () => void;
 }
 
+const NAV_ITEMS = [
+  { id: 'characters', label: '人物', icon: '👤' },
+  { id: 'worldview', label: '世界观', icon: '🌍' },
+  { id: 'roadmap', label: '路线图', icon: '📈' },
+  { id: 'sparks', label: '火花', icon: '✨' },
+  { id: 'graph', label: '图谱', icon: '🕸' },
+];
+
+const ACTION_ITEMS = [
+  { id: 'todo', label: '📋 待办' },
+  { id: 'sync', label: '🔄 同步' },
+  { id: 'stats', label: '📊 统计' },
+  { id: 'versions', label: '📁 版本' },
+  { id: 'export', label: '📤 导出' },
+  { id: 'settings', label: '⚙ 设置' },
+];
+
+const noDrag: React.CSSProperties = {
+  WebkitAppRegion: 'no-drag',
+};
+
 export const StoryTopBar = ({
-  _activeNovel,
-  activeChapterTitle,
+  hasNovels,
   activeNavId,
   onNavClick,
+  onNovelAction,
   focusMode,
   onFocusToggle,
   aiPanelOpen,
   onAiPanelToggle,
+  sidebarCollapsed,
+  onSidebarToggle,
 }: StoryTopBarProps) => {
-  const navItems = [
-    { id: 'chapters', label: '章节管理', icon: '📖' },
-    { id: 'characters', label: '人物', icon: '👤' },
-    { id: 'worldview', label: '世界观', icon: '🌍' },
-    { id: 'roadmap', label: '路线图', icon: '📈' },
-    { id: 'sparks', label: '火花', icon: '✨' },
-    { id: 'graph', label: '图谱', icon: '🕸' },
-  ];
-
-  const actionItems = [
-    { id: 'todo', label: '📋 待办' },
-    { id: 'sync', label: '🔄 同步' },
-    { id: 'stats', label: '📊 统计' },
-    { id: 'versions', label: '📁 版本' },
-    { id: 'export', label: '📤 导出' },
-    { id: 'settings', label: '⚙ 设置' },
-  ];
-
   return (
     <div
       style={{
-        height: '38px',
+        height: 38,
         flexShrink: 0,
         background: 'var(--affine-background-secondary-color, #16162a)',
-        borderBottom: `1px solid var(--affine-border-color)`,
+        borderBottom: '1px solid var(--affine-border-color)',
         display: 'flex',
         alignItems: 'center',
-        padding: '0 16px',
-        gap: '16px',
+        padding: '0 8px 0 78px',
+        gap: 4,
         position: 'relative',
         zIndex: 1,
+        fontSize: 14,
       }}
     >
-      {/* Project Info (Left) */}
+      {/* Left: sidebar toggle + novel action */}
       <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          flexShrink: 0,
-        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
       >
-        <span
+        <button
+          onClick={onSidebarToggle}
+          title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
           style={{
-            color: 'var(--affine-primary-color, #6c5ce7)',
-            fontSize: '14px',
-            fontWeight: 600,
+            ...noDrag,
+            background: 'transparent',
+            border: 'none',
+            borderRadius: 4,
+            color: 'var(--affine-text-primary-color)',
+            cursor: 'pointer',
+            padding: '4px 6px',
+            display: 'flex',
+            alignItems: 'center',
+            fontSize: 14,
+            transition: 'background 0.15s',
           }}
         >
-          Story
-        </span>
-        {activeChapterTitle && (
-          <span
-            style={{
-              color: 'var(--affine-text-secondary-color)',
-              fontSize: '14px',
-            }}
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            {activeChapterTitle}
-          </span>
-        )}
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <line x1="9" y1="3" x2="9" y2="21" />
+          </svg>
+        </button>
+
+        <button
+          onClick={onNovelAction}
+          className={!hasNovels ? 'story-create-novel-btn' : undefined}
+          style={{
+            ...noDrag,
+            background: 'transparent',
+            border: 'none',
+            borderRadius: 4,
+            color: 'var(--affine-primary-color, #6c5ce7)',
+            cursor: 'pointer',
+            padding: '4px 10px',
+            fontSize: 14,
+            fontWeight: 500,
+            whiteSpace: 'nowrap',
+            lineHeight: '22px',
+            transition: 'background 0.15s',
+          }}
+        >
+          {hasNovels ? '切换小说' : '创建小说'}
+        </button>
       </div>
 
-      {/* Navigation Items (Center) */}
+      {/* Center: nav items */}
       <div
         style={{
           display: 'flex',
-          gap: '2px',
+          gap: 1,
           flex: 1,
           justifyContent: 'center',
         }}
       >
-        {navItems.map(item => (
-          <button
-            key={item.id}
-            onClick={() => onNavClick(item.id)}
-            style={{
-              background:
-                activeNavId === item.id
+        {NAV_ITEMS.map(item => {
+          const isActive = activeNavId === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => onNavClick(item.id)}
+              style={{
+                ...noDrag,
+                background: isActive
                   ? 'var(--affine-primary-color, #6c5ce7)'
                   : 'transparent',
-              color:
-                activeNavId === item.id
-                  ? 'white'
-                  : 'var(--affine-text-primary-color)',
-              border: 'none',
-              borderRadius: '4px',
-              padding: '4px 12px',
-              fontSize: '14px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              transition: 'background 0.15s, color 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            <span>{item.icon}</span>
-            <span>{item.label}</span>
-          </button>
-        ))}
+                color: isActive ? 'white' : 'var(--affine-text-primary-color)',
+                border: 'none',
+                borderRadius: 3,
+                padding: '3px 8px',
+                fontSize: 13,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 3,
+                transition: 'background 0.15s, color 0.15s',
+                whiteSpace: 'nowrap',
+                lineHeight: '22px',
+              }}
+            >
+              <span style={{ fontSize: 14 }}>{item.icon}</span>
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Action Items (Right) */}
+      {/* Right: actions */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
+          gap: 2,
           flexShrink: 0,
         }}
       >
-        {actionItems.map(item => (
+        {ACTION_ITEMS.map(item => (
           <button
             key={item.id}
+            onClick={() => onNavClick(item.id)}
             style={{
+              ...noDrag,
               background: 'transparent',
               color: 'var(--affine-text-primary-color)',
               border: 'none',
-              borderRadius: '4px',
-              padding: '4px 12px',
-              fontSize: '14px',
+              borderRadius: 3,
+              padding: '3px 6px',
+              fontSize: 13,
               cursor: 'pointer',
               transition: 'background 0.15s',
+              whiteSpace: 'nowrap',
+              lineHeight: '22px',
             }}
           >
             {item.label}
           </button>
         ))}
 
-        {/* Vertical Divider */}
         <div
           style={{
-            width: '1px',
-            height: '20px',
+            width: 1,
+            height: 16,
             background: 'var(--affine-border-color)',
+            margin: '0 4px',
           }}
         />
 
-        {/* Focus Mode Button */}
         <button
           onClick={onFocusToggle}
           style={{
+            ...noDrag,
             background: focusMode
               ? 'var(--affine-primary-color, #6c5ce7)'
               : 'transparent',
             color: focusMode ? 'white' : 'var(--affine-text-primary-color)',
             border: 'none',
-            borderRadius: '4px',
-            padding: '4px 12px',
-            fontSize: '14px',
+            borderRadius: 3,
+            padding: '3px 8px',
+            fontSize: 13,
             cursor: 'pointer',
             transition: 'background 0.15s, color 0.15s',
             whiteSpace: 'nowrap',
+            lineHeight: '22px',
           }}
         >
-          专注模式
+          专注
         </button>
 
-        {/* AI Button */}
         <button
           onClick={onAiPanelToggle}
           style={{
+            ...noDrag,
             background: aiPanelOpen
               ? 'var(--affine-primary-color, #6c5ce7)'
               : 'transparent',
             color: aiPanelOpen ? 'white' : 'var(--affine-text-primary-color)',
             border: 'none',
-            borderRadius: '4px',
-            padding: '4px 12px',
-            fontSize: '14px',
+            borderRadius: 3,
+            padding: '3px 8px',
+            fontSize: 13,
+            fontWeight: 600,
             cursor: 'pointer',
             transition: 'background 0.15s, color 0.15s',
             whiteSpace: 'nowrap',
+            lineHeight: '22px',
           }}
         >
           AI

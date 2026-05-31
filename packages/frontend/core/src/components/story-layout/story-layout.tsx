@@ -1,7 +1,14 @@
 /* eslint-disable rxjs/finnish */
 import './story-layout.css';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { AIChatRuntime } from '../../blocksuite/ai/runtime/chat/runtime';
 import { WorkspaceAIChatSessionStrategy } from '../../blocksuite/ai/runtime/chat/session-strategy';
@@ -23,6 +30,39 @@ import { StoryTodoPanel } from './story-todo-panel';
 import { StoryTopBar } from './story-top-bar';
 import { WorkspaceProvider } from './workspace-provider';
 
+class StoryErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  override state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  override render() {
+    if (this.state.error) {
+      return (
+        <div
+          style={{
+            padding: 32,
+            color: '#e74c3c',
+            background: '#1a1a2e',
+            minHeight: '100vh',
+            fontFamily: 'monospace',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          <h2>Story Layout Error</h2>
+          <div>{this.state.error.message}</div>
+          <div style={{ marginTop: 16, opacity: 0.7 }}>
+            {this.state.error.stack}
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const THEME = {
   background: 'var(--affine-background-primary-color)',
   panel: 'var(--affine-background-secondary-color, #16162a)',
@@ -32,15 +72,12 @@ const THEME = {
   border: 'var(--affine-border-color)',
 };
 
-// Minimal signal stub for BlockSuite components
 const stubSignal = (v?: any) => ({
   value: v,
   peek: () => v,
   subscribe: () => () => {},
 });
 
-// Service stubs for AIChatContent — satisfies required property contracts
-// without pulling in the full AFFiNE cloud service layer
 const aiServiceStubs = {
   subscriptionService: {
     subscription: {
@@ -99,7 +136,7 @@ const aiServiceStubs = {
   onOpenDoc: () => {},
 };
 
-const styles = {
+const styles: Record<string, React.CSSProperties> = {
   root: {
     display: 'flex',
     flexDirection: 'column',
@@ -123,10 +160,23 @@ const styles = {
     background: 'var(--affine-background-secondary-color, #16162a)',
     borderRight: '1px solid var(--affine-border-color)',
     overflow: 'hidden',
+    transition: 'width 0.2s, min-width 0.2s, opacity 0.2s',
+  },
+  sidebarCollapsed: {
+    width: 0,
+    minWidth: 0,
+    overflow: 'hidden',
+    borderRight: 'none',
   },
 };
 
-export const StoryLayout = () => {
+export const StoryLayout = () => (
+  <StoryErrorBoundary>
+    <StoryLayoutContent />
+  </StoryErrorBoundary>
+);
+
+const StoryLayoutContent = () => {
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelWidth, setAiPanelWidth] = useState(380);
   const [aiPanelResizing, setAiPanelResizing] = useState(false);
@@ -137,17 +187,23 @@ export const StoryLayout = () => {
   const [todoAnchorEl, setTodoAnchorEl] = useState<HTMLElement | null>(null);
   const [expandedVolumes, setExpandedVolumes] = useState<string[]>([]);
   const [focusMode, setFocusMode] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const requestService = getStoryAIRequestService();
   const runtime = useMemo(() => {
     if (!requestService) return null;
-    return new AIChatRuntime({
-      request: requestService,
-      scope: { kind: 'workspace', workspaceId: 'story-workspace' },
-      strategy: new WorkspaceAIChatSessionStrategy(),
-    });
+    try {
+      return new AIChatRuntime({
+        request: requestService as any,
+        scope: { kind: 'workspace', workspaceId: 'story-workspace' },
+        strategy: new WorkspaceAIChatSessionStrategy(),
+      });
+    } catch (e) {
+      console.error('[StoryLayout] AIChatRuntime init failed:', e);
+      return null;
+    }
   }, [requestService]);
   const snapshot = useAIChatRuntime(runtime);
 
@@ -167,20 +223,6 @@ export const StoryLayout = () => {
   const openChatWithPrompt = useCallback((_prompt: string) => {
     setAiPanelOpen(true);
   }, []);
-
-  const handleCreateNovel = useCallback(
-    (_novelData: {
-      title: string;
-      mode: 'long' | 'short';
-      targetWordCount?: number;
-      targetChapterCount?: number;
-      worldview: string;
-      motivation?: string;
-    }) => {
-      setShowNewNovelDialog(false);
-    },
-    []
-  );
 
   return (
     <StoryFrameworkRoot>
@@ -207,8 +249,9 @@ export const StoryLayout = () => {
             setExpandedVolumes={setExpandedVolumes}
             focusMode={focusMode}
             setFocusMode={setFocusMode}
+            sidebarCollapsed={sidebarCollapsed}
+            setSidebarCollapsed={setSidebarCollapsed}
             openChatWithPrompt={openChatWithPrompt}
-            handleCreateNovel={handleCreateNovel}
             chatContainerRef={chatContainerRef}
           />
         </StoryProvider>
@@ -217,13 +260,11 @@ export const StoryLayout = () => {
   );
 };
 
-// Inner component that can access useStory() via StoryProvider
 function StoryLayoutInner({
   aiPanelOpen,
   setAiPanelOpen,
   aiPanelWidth,
   setAiPanelWidth,
-  _aiPanelResizing,
   setAiPanelResizing,
   activeAiTab,
   setActiveAiTab,
@@ -234,20 +275,20 @@ function StoryLayoutInner({
   showTodoPanel,
   setShowTodoPanel,
   todoAnchorEl,
-  _setTodoAnchorEl,
   expandedVolumes,
   setExpandedVolumes,
   focusMode,
   setFocusMode,
+  sidebarCollapsed,
+  setSidebarCollapsed,
   openChatWithPrompt,
-  handleCreateNovel,
   chatContainerRef,
 }: {
   aiPanelOpen: boolean;
   setAiPanelOpen: React.Dispatch<React.SetStateAction<boolean>>;
   aiPanelWidth: number;
   setAiPanelWidth: React.Dispatch<React.SetStateAction<number>>;
-  _aiPanelResizing: boolean;
+  aiPanelResizing: boolean;
   setAiPanelResizing: React.Dispatch<React.SetStateAction<boolean>>;
   activeAiTab: AiTab;
   setActiveAiTab: React.Dispatch<React.SetStateAction<AiTab>>;
@@ -258,25 +299,18 @@ function StoryLayoutInner({
   showTodoPanel: boolean;
   setShowTodoPanel: React.Dispatch<React.SetStateAction<boolean>>;
   todoAnchorEl: HTMLElement | null;
-  _setTodoAnchorEl: React.Dispatch<React.SetStateAction<HTMLElement | null>>;
+  setTodoAnchorEl: React.Dispatch<React.SetStateAction<HTMLElement | null>>;
   expandedVolumes: string[];
   setExpandedVolumes: React.Dispatch<React.SetStateAction<string[]>>;
   focusMode: boolean;
   setFocusMode: React.Dispatch<React.SetStateAction<boolean>>;
+  sidebarCollapsed: boolean;
+  setSidebarCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
   openChatWithPrompt: (prompt: string) => void;
-  handleCreateNovel: (novel: {
-    title: string;
-    mode: 'long' | 'short';
-    targetWordCount?: number;
-    targetChapterCount?: number;
-    worldview: string;
-    motivation?: string;
-  }) => void;
-  chatContainerRef: React.RefObject<HTMLDivElement>;
+  chatContainerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const sessionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Session persistence effect
   useEffect(() => {
     if (sessionSaveTimer.current) clearTimeout(sessionSaveTimer.current);
     sessionSaveTimer.current = setTimeout(() => {
@@ -284,35 +318,47 @@ function StoryLayoutInner({
         aiPanelOpen,
         aiPanelWidth,
         activeAiTab,
-        sidebarCollapsed: false,
+        sidebarCollapsed,
         chapterTreeExpandedVolumes: expandedVolumes,
       });
     }, 500);
     return () => {
       if (sessionSaveTimer.current) {
         clearTimeout(sessionSaveTimer.current);
-        // Flush final save
         saveSession({
           aiPanelOpen,
           aiPanelWidth,
           activeAiTab,
-          sidebarCollapsed: false,
+          sidebarCollapsed,
           chapterTreeExpandedVolumes: expandedVolumes,
         });
       }
     };
-  }, [aiPanelOpen, aiPanelWidth, activeAiTab, expandedVolumes]);
+  }, [
+    aiPanelOpen,
+    aiPanelWidth,
+    activeAiTab,
+    sidebarCollapsed,
+    expandedVolumes,
+  ]);
 
-  // Session restore effect
   useEffect(() => {
     const session = loadSession();
     if (!session) return;
     if (session.aiPanelOpen !== undefined) setAiPanelOpen(session.aiPanelOpen);
     if (session.aiPanelWidth) setAiPanelWidth(session.aiPanelWidth);
     if (session.activeAiTab) setActiveAiTab(session.activeAiTab);
+    if (session.sidebarCollapsed !== undefined)
+      setSidebarCollapsed(session.sidebarCollapsed);
     if (session.chapterTreeExpandedVolumes)
       setExpandedVolumes(session.chapterTreeExpandedVolumes);
-  }, [setAiPanelOpen, setAiPanelWidth, setActiveAiTab, setExpandedVolumes]);
+  }, [
+    setAiPanelOpen,
+    setAiPanelWidth,
+    setActiveAiTab,
+    setSidebarCollapsed,
+    setExpandedVolumes,
+  ]);
 
   const {
     novels,
@@ -321,16 +367,15 @@ function StoryLayoutInner({
     activeChapterIndex,
     volumes,
     todos,
-    switchNovel,
     addChapter,
     addVolume,
     selectChapter,
+    createNovel,
     addTodo,
     toggleTodo,
     deleteTodo,
   } = useStory();
 
-  // Session persistence effect - save novel and chapter state
   useEffect(() => {
     if (sessionSaveTimer.current) clearTimeout(sessionSaveTimer.current);
     sessionSaveTimer.current = setTimeout(() => {
@@ -342,7 +387,6 @@ function StoryLayoutInner({
     return () => {
       if (sessionSaveTimer.current) {
         clearTimeout(sessionSaveTimer.current);
-        // Flush final save
         saveSession({
           activeNovelId,
           activeChapterIndex: activeChapterIndex ?? -1,
@@ -350,11 +394,6 @@ function StoryLayoutInner({
       }
     };
   }, [activeNovelId, activeChapterIndex]);
-
-  const activeChapter =
-    activeChapterIndex !== null
-      ? chapters.find(ch => ch.meta.index === activeChapterIndex)
-      : null;
 
   const handleNavClick = useCallback(
     (id: string) => {
@@ -367,33 +406,53 @@ function StoryLayoutInner({
     [setShowTodoPanel, setActiveNavId]
   );
 
+  const handleCreateNovel = useCallback(
+    (data: {
+      title: string;
+      mode: 'long' | 'short';
+      targetWordCount?: number;
+      targetChapterCount?: number;
+      worldview: string;
+      motivation?: string;
+    }) => {
+      createNovel(data);
+      setShowNewNovelDialog(false);
+    },
+    [createNovel, setShowNewNovelDialog]
+  );
+
+  const handleNovelAction = useCallback(() => {
+    setShowNewNovelDialog(true);
+  }, [setShowNewNovelDialog]);
+
+  const showSidebar = !focusMode && !sidebarCollapsed;
+
   return (
     <>
       <div style={styles.root}>
-        {/* Full-width top bar */}
         <StoryTopBar
           activeNovel={novels.find(n => n.id === activeNovelId) ?? null}
-          activeChapterTitle={activeChapter?.meta?.title ?? ''}
+          hasNovels={novels.length > 0}
           activeNavId={activeNavId}
           onNavClick={handleNavClick}
+          onNovelAction={handleNovelAction}
           focusMode={focusMode}
           onFocusToggle={() => setFocusMode(p => !p)}
           aiPanelOpen={aiPanelOpen}
           onAiPanelToggle={() => setAiPanelOpen(p => !p)}
+          sidebarCollapsed={sidebarCollapsed}
+          onSidebarToggle={() => setSidebarCollapsed(p => !p)}
         />
 
-        {/* Three columns */}
         <div style={styles.columns}>
-          {/* Left sidebar (hidden in focus mode) */}
-          {!focusMode && (
-            <div style={styles.sidebar}>
-              <StoryNovelSwitcher
-                novels={novels}
-                activeNovelId={activeNovelId}
-                onSwitchNovel={switchNovel}
-                onCreateNovel={() => setShowNewNovelDialog(true)}
-                theme={THEME}
-              />
+          {/* Left sidebar */}
+          <div style={showSidebar ? styles.sidebar : styles.sidebarCollapsed}>
+            <StoryNovelSwitcher
+              novels={novels}
+              activeNovelId={activeNovelId}
+              theme={THEME}
+            />
+            {activeNovelId ? (
               <StoryChapterTree
                 volumes={volumes}
                 chapters={chapters.map(ch => ({
@@ -414,8 +473,10 @@ function StoryLayoutInner({
                 onAddVolume={() => addVolume('新卷')}
                 theme={THEME}
               />
-            </div>
-          )}
+            ) : (
+              <div style={{ flex: 1 }} />
+            )}
+          </div>
 
           {/* Middle: Editor */}
           <StoryEditorPanel
@@ -461,7 +522,8 @@ function StoryLayoutInner({
       />
       <PlaceholderDialog
         open={
-          !!activeNavId && !['chapters', 'settings'].includes(activeNavId ?? '')
+          !!activeNavId &&
+          !['chapters', 'settings', 'todo'].includes(activeNavId ?? '')
         }
         title={activeNavId ?? ''}
         onClose={() => setActiveNavId(null)}

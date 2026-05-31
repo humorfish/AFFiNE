@@ -80,6 +80,19 @@ export class MainWindowManager {
       defaultHeight: 800,
     });
 
+    const { getExposedMeta } = await import('../exposed');
+    const mainExposedMeta = getExposedMeta();
+    const helperProcessManager = await ensureHelperProcess();
+
+    // Build preload arguments
+    // Note: connectMain() sets up helperProcessManager.rpc but needs a BrowserWindow.
+    // Since we can't call it before creating the window, we pass main meta only.
+    // Helper meta will be sent via IPC later (the preload handles null helper meta).
+    const additionalArguments = [
+      `--main-exposed-meta=` + JSON.stringify(mainExposedMeta),
+      `--window-name=main`,
+    ];
+
     const browserWindow = new BrowserWindow({
       titleBarStyle: isMacOS()
         ? 'hiddenInset'
@@ -94,25 +107,40 @@ export class MainWindowManager {
       minHeight: 480,
       visualEffectState: 'active',
       vibrancy: 'under-window',
-      // backgroundMaterial: 'mica',
       height: mainWindowState.height,
-      show: false, // Use 'ready-to-show' event to show window
+      show: false,
       webPreferences: buildWebPreferences({
         webgl: true,
+        preload: join(__dirname, './preload.js'),
+        additionalArguments,
       }),
     });
-    const helper = await ensureHelperProcess();
-    helper.connectMain(browserWindow);
+
+    // Now connect main RPC (sets up helperProcessManager.rpc)
+    helperProcessManager.connectMain(browserWindow);
 
     if (isLinux()) {
       browserWindow.setIcon(
-        // __dirname is `packages/frontend/apps/electron/dist` (the bundled output directory)
         join(resourcesPath, `icons/icon_${buildType}_64x64.png`)
       );
     }
 
     nativeTheme.themeSource = 'light';
     mainWindowState.manage(browserWindow);
+
+    // Load the app
+    browserWindow.loadURL(mainWindowOrigin + '/').catch(err => {
+      logger.error('failed to load app URL', err);
+    });
+
+    // Connect helper process renderer bridge on load
+    let disconnectHelperProcess: (() => void) | null = null;
+    browserWindow.webContents.on('did-finish-load', () => {
+      disconnectHelperProcess?.();
+      disconnectHelperProcess = helperProcessManager.connectRenderer(
+        browserWindow.webContents
+      );
+    });
 
     this.bindEvents(browserWindow);
     return browserWindow;

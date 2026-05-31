@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type AiTab = 'chat' | 'continue' | 'polish' | 'analyze' | 'explain';
 
@@ -6,7 +6,7 @@ interface StoryAIPanelProps {
   width: number;
   activeTab: AiTab;
   onActiveTabChange: (tab: AiTab) => void;
-  chatContainerRef: React.RefObject<HTMLDivElement>;
+  chatContainerRef: React.RefObject<HTMLDivElement | null>;
 }
 
 const TABS: { id: AiTab; icon: string; label: string }[] = [
@@ -56,13 +56,7 @@ function ActionPanel({ mode }: { mode: Exclude<AiTab, 'chat'> }) {
         textAlign: 'center',
       }}
     >
-      <div
-        style={{
-          fontSize: '32px',
-          marginBottom: '12px',
-          opacity: 0.7,
-        }}
-      >
+      <div style={{ fontSize: '32px', marginBottom: '12px', opacity: 0.7 }}>
         {tab.icon}
       </div>
       <div
@@ -107,20 +101,20 @@ export const StoryAIPanel = ({
   onActiveTabChange,
   chatContainerRef,
 }: StoryAIPanelProps) => {
-  const [inputValue, setInputValue] = useState('');
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const prevTabRef = useRef<AiTab>(activeTab);
 
-  const handleSend = () => {
-    const text = inputValue.trim();
-    if (!text) return;
-    setInputValue('');
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  // Switching to a different tab clears the session
+  useEffect(() => {
+    if (activeTab !== prevTabRef.current) {
+      setSessionId(crypto.randomUUID());
+      prevTabRef.current = activeTab;
     }
-  };
+  }, [activeTab]);
+
+  const handleNewChat = useCallback(() => {
+    setSessionId(crypto.randomUUID());
+  }, []);
 
   return (
     <div
@@ -199,6 +193,8 @@ export const StoryAIPanel = ({
         {TOOLBAR_ITEMS.map((item, idx) => (
           <button
             key={idx}
+            onClick={idx === 0 ? handleNewChat : undefined}
+            title={item.label}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -209,7 +205,7 @@ export const StoryAIPanel = ({
               background: 'transparent',
               color: 'var(--affine-text-secondary-color)',
               cursor: 'pointer',
-              fontSize: '11px',
+              fontSize: '12px',
               whiteSpace: 'nowrap',
             }}
           >
@@ -219,9 +215,10 @@ export const StoryAIPanel = ({
         ))}
       </div>
 
-      {/* Content area */}
+      {/* Content area — chat tab renders the BlockSuite web component container */}
       {activeTab === 'chat' ? (
         <div
+          key={sessionId}
           ref={chatContainerRef}
           style={{
             flex: 1,
@@ -231,61 +228,6 @@ export const StoryAIPanel = ({
       ) : (
         <ActionPanel mode={activeTab} />
       )}
-
-      {/* Input area */}
-      <div
-        style={{
-          borderTop: '1px solid var(--affine-border-color)',
-          padding: '10px 12px',
-          background: 'var(--affine-background-secondary-color, #16162a)',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            background: 'var(--affine-background-primary-color)',
-            borderRadius: '6px',
-            padding: '8px 12px',
-            border: '1px solid var(--affine-border-color)',
-          }}
-        >
-          <input
-            type="text"
-            value={inputValue}
-            onChange={e => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入消息..."
-            style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: 'var(--affine-text-primary-color)',
-              fontSize: '13px',
-            }}
-          />
-          <button
-            onClick={handleSend}
-            disabled={!inputValue.trim()}
-            style={{
-              background: inputValue.trim()
-                ? 'var(--affine-primary-color)'
-                : 'var(--affine-border-color)',
-              border: 'none',
-              borderRadius: '4px',
-              color: '#ffffff',
-              cursor: inputValue.trim() ? 'pointer' : 'not-allowed',
-              padding: '4px 10px',
-              fontSize: '12px',
-              marginLeft: '8px',
-              transition: 'background 0.15s',
-            }}
-          >
-            发送
-          </button>
-        </div>
-      </div>
     </div>
   );
 };

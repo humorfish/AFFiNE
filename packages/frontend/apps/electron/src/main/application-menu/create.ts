@@ -1,22 +1,14 @@
 import { app, Menu } from 'electron';
 
 import { isMacOS } from '../../shared/utils';
-import { logger, revealLogFile } from '../logger';
-import { uiSubjects } from '../ui/subject';
+import { revealLogFile } from '../logger';
 import { checkForUpdates } from '../updater';
 import {
-  addTab,
   initAndShowMainWindow,
   reloadView,
+  showDevTools,
   showMainWindow,
-  switchTab,
-  switchToNextTab,
-  switchToPreviousTab,
-  undoCloseTab,
-  WebContentViewsManager,
 } from '../windows-manager';
-import { popupManager } from '../windows-manager/popup';
-import { WorkerManager } from '../worker/pool';
 import { applicationMenuSubjects } from './subject';
 
 // Unique id for menuitems
@@ -25,9 +17,6 @@ const MENUITEM_NEW_PAGE = 'affine:new-page';
 export function createApplicationMenu() {
   const isMac = isMacOS();
 
-  // Electron menu cannot be modified
-  // You have to copy the complete default menu template event if you want to add a single custom item
-  // See https://www.electronjs.org/docs/latest/api/menu#examples
   const template = [
     // { role: 'appMenu' }
     ...(isMac
@@ -66,7 +55,6 @@ export function createApplicationMenu() {
           accelerator: isMac ? 'Cmd+N' : 'Ctrl+N',
           click: async () => {
             await initAndShowMainWindow();
-            // fixme: if the window is just created, the new page action will not be triggered
             applicationMenuSubjects.newPageAction$.next('default');
           },
         },
@@ -108,62 +96,10 @@ export function createApplicationMenu() {
           },
         },
         {
-          role: 'windowMenu',
-        },
-        {
           label: 'Open devtools',
           accelerator: isMac ? 'Cmd+Option+I' : 'Ctrl+Shift+I',
           click: () => {
-            const workerContents = Array.from(
-              WorkerManager.instance.workers.values()
-            ).map(
-              worker => [worker.key, worker.browserWindow.webContents] as const
-            );
-
-            const tabs = Array.from(
-              WebContentViewsManager.instance.tabViewsMap
-            ).map(view => {
-              const isActive = WebContentViewsManager.instance.isActiveTab(
-                view[0]
-              );
-              return [
-                view[0] + (isActive ? ' (active)' : ''),
-                view[1].webContents,
-              ] as const;
-            });
-
-            const popups = Array.from(popupManager.popupWindows$.value.values())
-              .filter(popup => popup.browserWindow)
-              .map(popup => {
-                // oxlint-disable-next-line no-non-null-assertion
-                return [popup.type, popup.browserWindow!.webContents] as const;
-              });
-
-            const allWebContents = [
-              ['tabs', tabs],
-              ['workers', workerContents],
-              ['popups', popups],
-            ] as const;
-
-            Menu.buildFromTemplate(
-              allWebContents.flatMap(([type, contents]) => {
-                return [
-                  {
-                    label: type,
-                    enabled: false,
-                  },
-                  ...contents.map(([id, webContents]) => ({
-                    label: id,
-                    click: () => {
-                      webContents.openDevTools({
-                        mode: 'undocked',
-                      });
-                    },
-                  })),
-                  { type: 'separator' },
-                ];
-              })
-            ).popup();
+            showDevTools();
           },
         },
         { type: 'separator' },
@@ -175,75 +111,6 @@ export function createApplicationMenu() {
         { role: 'zoomOut' },
         { type: 'separator' },
         { role: 'togglefullscreen' },
-        { type: 'separator' },
-        {
-          label: 'New tab',
-          accelerator: 'CommandOrControl+T',
-          click() {
-            logger.info('New tab with shortcut');
-            addTab().catch(console.error);
-          },
-        },
-        {
-          label: 'Close view',
-          accelerator: 'CommandOrControl+W',
-          click() {
-            logger.info('Close view with shortcut');
-            // tell the active workbench to close the current view
-            uiSubjects.onCloseView$.next();
-          },
-        },
-        {
-          label: 'Undo close tab',
-          accelerator: 'CommandOrControl+Shift+T',
-          click() {
-            logger.info('Undo close tab with shortcut');
-            undoCloseTab().catch(console.error);
-          },
-        },
-        ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => {
-          const shortcut = `CommandOrControl+${n}`;
-          const listener = () => {
-            switchTab(n);
-          };
-          return {
-            acceleratorWorksWhenHidden: true,
-            label: `Switch to tab ${n}`,
-            accelerator: shortcut,
-            click: listener,
-            visible: false,
-          };
-        }),
-        {
-          label: 'Switch to next tab',
-          accelerator: 'Control+Tab',
-          click: () => {
-            switchToNextTab();
-          },
-        },
-        {
-          label: 'Switch to previous tab',
-          accelerator: 'Control+Shift+Tab',
-          click: () => {
-            switchToPreviousTab();
-          },
-        },
-        {
-          label: 'Switch to next tab (mac 2)',
-          accelerator: 'Alt+Command+]',
-          visible: false,
-          click: () => {
-            switchToNextTab();
-          },
-        },
-        {
-          label: 'Switch to previous tab (mac 2)',
-          accelerator: 'Alt+Command+[',
-          visible: false,
-          click: () => {
-            switchToPreviousTab();
-          },
-        },
       ],
     },
     {
@@ -285,8 +152,6 @@ export function createApplicationMenu() {
   ];
 
   // @ts-expect-error: The snippet is copied from Electron official docs.
-  //                   It's working as expected. No idea why it contains type errors.
-  //                   Just ignore for now.
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 

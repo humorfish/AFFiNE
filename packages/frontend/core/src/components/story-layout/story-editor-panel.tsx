@@ -39,7 +39,7 @@ interface StoryEditorPanelProps {
 }
 
 export const StoryEditorPanel = ({
-  focusMode,
+  focusMode: _focusMode,
   onFocusToggle: _onFocusToggle,
   onSendToChat,
   theme,
@@ -48,6 +48,9 @@ export const StoryEditorPanel = ({
     project,
     chapters,
     activeChapterIndex,
+    activeNovelId,
+    novels,
+    volumes,
     updateChapterContent,
     error,
     getChapterStore,
@@ -193,26 +196,66 @@ export const StoryEditorPanel = ({
         background: theme.background,
       }}
     >
-      {/* Saving/error indicator */}
+      {/* Status bar (20px) — chapter path, name, word count */}
       <div
         style={{
-          padding: '6px 24px',
-          borderBottom: focusMode ? 'none' : `1px solid ${theme.border}`,
+          height: 20,
+          minHeight: 20,
+          padding: '0 16px',
+          borderBottom: `1px solid ${theme.border}`,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'flex-end',
-          gap: '12px',
-          minHeight: focusMode ? 0 : undefined,
+          justifyContent: 'space-between',
+          background: theme.panel,
+          fontSize: 10,
+          color: theme.textMuted,
+          userSelect: 'none',
+          flexShrink: 0,
         }}
       >
-        {saving && (
-          <span style={{ color: theme.textMuted, fontSize: '12px' }}>
-            保存中...
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            overflow: 'hidden',
+          }}
+        >
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {(() => {
+              const novel = novels.find(n => n.id === activeNovelId);
+              const parts = [novel?.title ?? ''];
+              const vol = activeChapter?.meta
+                ? volumes?.find(_v =>
+                    chapters.some(ch => ch.meta.index === activeChapterIndex)
+                  )
+                : null;
+              if (vol) parts.push(vol.title);
+              parts.push(activeChapter?.meta?.title ?? '');
+              return parts.filter(Boolean).join(' / ');
+            })()}
           </span>
-        )}
-        {error && (
-          <span style={{ color: '#ff6666', fontSize: '12px' }}>保存失败</span>
-        )}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexShrink: 0,
+          }}
+        >
+          {saving && <span style={{ color: theme.textMuted }}>保存中...</span>}
+          {error && <span style={{ color: '#ff6666' }}>保存失败</span>}
+          {activeChapter?.meta?.wordCount !== undefined && (
+            <span>{activeChapter.meta.wordCount} 字</span>
+          )}
+        </div>
       </div>
       <div
         className="affine-page-viewport"

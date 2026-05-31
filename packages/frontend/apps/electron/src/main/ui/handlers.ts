@@ -1,43 +1,25 @@
 import { app, clipboard, nativeImage, nativeTheme } from 'electron';
 import { getLinkPreview } from 'link-preview-js';
-import { map, shareReplay } from 'rxjs';
+import { map } from 'rxjs';
 
 import { isMacOS } from '../../shared/utils';
 import { persistentConfig } from '../config-storage/persist';
 import { logger } from '../logger';
 import { openExternalSafely } from '../security/open-external';
 import { resolveAndValidateUrlForPreview } from '../security/url-safety';
-import type { WorkbenchViewMeta } from '../shared-state-schema';
 import { MenubarStateKey, MenubarStateSchema } from '../shared-state-schema';
 import { globalStateStorage } from '../shared-storage/storage';
 import type { NamespaceHandlers } from '../type';
 import {
-  activateView,
-  addTab,
-  closeTab,
-  ensureTabLoaded,
   getMainWindow,
   getOnboardingWindow,
-  getTabsStatus,
-  getTabViewsMeta,
-  getWorkbenchMeta,
   handleWebContentsResize,
   initAndShowMainWindow,
-  isActiveTab,
   launchStage,
-  moveTab,
-  pingAppLayoutReady,
   showDevTools,
-  showTab,
-  updateActiveViewMeta,
-  updateWorkbenchMeta,
-  updateWorkbenchViewMeta,
 } from '../windows-manager';
-import { showTabContextMenu } from '../windows-manager/context-menu';
 import { getOrCreateCustomThemeWindow } from '../windows-manager/custom-theme-window';
 import { getChallengeResponse } from './challenge';
-import { uiSubjects } from './subject';
-
 const EMPTY_OBJECT = Object.freeze({
   title: undefined,
   description: undefined,
@@ -175,7 +157,7 @@ export const uiHandlers = {
         timeout: 6000,
         headers: {
           'User-Agent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0 Safari/537.36 Edg/120.0.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0',
         },
         followRedirects: 'manual',
         handleRedirects: (_baseUrl: string, forwardedUrl: string) => {
@@ -215,70 +197,9 @@ export const uiHandlers = {
     return openExternalSafely(url);
   },
 
-  // tab handlers
-  isActiveTab: async e => {
-    return isActiveTab(e.sender);
-  },
-  getWorkbenchMeta: async (_, ...args: Parameters<typeof getWorkbenchMeta>) => {
-    return getWorkbenchMeta(...args);
-  },
-  updateWorkbenchMeta: async (
-    _,
-    ...args: Parameters<typeof updateWorkbenchMeta>
-  ) => {
-    return updateWorkbenchMeta(...args);
-  },
-  updateWorkbenchViewMeta: async (
-    _,
-    ...args: Parameters<typeof updateWorkbenchViewMeta>
-  ) => {
-    return updateWorkbenchViewMeta(...args);
-  },
-  getTabViewsMeta: async () => {
-    return getTabViewsMeta();
-  },
-  updateActiveViewMeta: async (e, meta: Partial<WorkbenchViewMeta>) => {
-    return updateActiveViewMeta(e.sender, meta);
-  },
-  getTabsStatus: async () => {
-    return getTabsStatus();
-  },
-  addTab: async (_, ...args: Parameters<typeof addTab>) => {
-    await addTab(...args);
-  },
-  showTab: async (_, ...args: Parameters<typeof showTab>) => {
-    await showTab(...args);
-  },
-  tabGoTo: async (_, tabId: string, to: string) => {
-    uiSubjects.tabGoToRequest$.next({ tabId, to });
-  },
-  ensureTabLoaded: async (_, ...args: Parameters<typeof ensureTabLoaded>) => {
-    await ensureTabLoaded(...args);
-  },
-  closeTab: async (_, ...args: Parameters<typeof closeTab>) => {
-    await closeTab(...args);
-  },
-
-  activateView: async (_, ...args: Parameters<typeof activateView>) => {
-    await activateView(...args);
-  },
-  moveTab: async (_, ...args: Parameters<typeof moveTab>) => {
-    moveTab(...args);
-  },
-  toggleRightSidebar: async (_, tabId?: string) => {
-    tabId ??= getTabViewsMeta().activeWorkbenchId;
-    if (tabId) {
-      uiSubjects.onToggleRightSidebar$.next(tabId);
-    }
-  },
-  pingAppLayoutReady: async (e, ready = true) => {
-    pingAppLayoutReady(e.sender, ready);
-  },
+  // dev tools
   showDevTools: async (_, ...args: Parameters<typeof showDevTools>) => {
     return showDevTools(...args);
-  },
-  showTabContextMenu: async (_, tabKey: string, viewIndex: number) => {
-    return showTabContextMenu(tabKey, viewIndex);
   },
   openThemeEditor: async () => {
     const win = await getOrCreateCustomThemeWindow();
