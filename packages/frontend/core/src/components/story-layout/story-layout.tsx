@@ -14,7 +14,12 @@ import { AIChatRuntime } from '../../blocksuite/ai/runtime/chat/runtime';
 import { WorkspaceAIChatSessionStrategy } from '../../blocksuite/ai/runtime/chat/session-strategy';
 import { useAIChatElement } from '../../blocksuite/ai/runtime/chat/use-element';
 import { useAIChatRuntime } from '../../blocksuite/ai/runtime/chat/use-runtime';
-import { getStoryAIRequestService } from './ai/setup';
+import {
+  clearAIChapterContext,
+  getStoryAIRequestService,
+  setAIChapterContext,
+  setEditorApiGetterForAI,
+} from './ai/setup';
 import { NovelDialog } from './novel-dialog';
 import { PlaceholderDialog } from './placeholder-dialog';
 import { loadSession, saveSession } from './session-storage';
@@ -22,13 +27,13 @@ import { SettingsDialog } from './settings-dialog';
 import { type AiTab, StoryAIPanel } from './story-ai-panel';
 import { StoryChapterTree } from './story-chapter-tree';
 import { StoryProvider, useStory } from './story-context';
-import { StoryEditorPanel } from './story-editor-panel';
+import { type EditorAPI, StoryEditorPanel } from './story-editor-panel';
 import { StoryFrameworkRoot } from './story-framework';
 import { StoryNovelSwitcher } from './story-novel-switcher';
 import { StoryResizeHandle } from './story-resize-handle';
 import { StoryTodoPanel } from './story-todo-panel';
 import { StoryTopBar } from './story-top-bar';
-import { WorkspaceProvider } from './workspace-provider';
+import { useWorkspace, WorkspaceProvider } from './workspace-provider';
 
 class StoryErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -177,6 +182,21 @@ export const StoryLayout = () => (
 );
 
 const StoryLayoutContent = () => {
+  // Suppress benign ResizeObserver loop warning (common in complex layouts)
+  useEffect(() => {
+    const handler = (e: ErrorEvent) => {
+      if (
+        e.message ===
+        'ResizeObserver loop completed with undelivered notifications.'
+      ) {
+        e.stopImmediatePropagation();
+        return true;
+      }
+    };
+    window.addEventListener('error', handler);
+    return () => window.removeEventListener('error', handler);
+  }, []);
+
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelWidth, setAiPanelWidth] = useState(380);
   const [aiPanelResizing, setAiPanelResizing] = useState(false);
@@ -193,6 +213,12 @@ const StoryLayoutContent = () => {
   );
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const editorApiRef = useRef<EditorAPI | null>(null);
+
+  // Register getter once — reads ref at request time, always current
+  useEffect(() => {
+    setEditorApiGetterForAI(() => editorApiRef.current);
+  }, []);
 
   const requestService = getStoryAIRequestService();
   const runtime = useMemo(() => {
@@ -273,6 +299,7 @@ const StoryLayoutContent = () => {
             chatContainerRef={chatContainerRef}
             dirtyChapterIds={dirtyChapterIds}
             onEditorDirtyChange={handleEditorDirtyChange}
+            editorApiRef={editorApiRef}
           />
         </StoryProvider>
       </WorkspaceProvider>
@@ -305,6 +332,7 @@ function StoryLayoutInner({
   chatContainerRef,
   dirtyChapterIds,
   onEditorDirtyChange,
+  editorApiRef,
 }: {
   aiPanelOpen: boolean;
   setAiPanelOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -332,6 +360,7 @@ function StoryLayoutInner({
   chatContainerRef: React.RefObject<HTMLDivElement | null>;
   dirtyChapterIds: Set<string>;
   onEditorDirtyChange: (dirty: boolean, chapterId: string) => void;
+  editorApiRef: React.RefObject<EditorAPI | null>;
 }) {
   const sessionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -403,6 +432,19 @@ function StoryLayoutInner({
     toggleTodo,
     deleteTodo,
   } = useStory();
+
+  const { workspacePath } = useWorkspace();
+
+  // Load persisted AI session when active chapter changes
+  useEffect(() => {
+    if (!workspacePath || !activeNovelId || !activeChapterId) {
+      clearAIChapterContext();
+      return;
+    }
+    setAIChapterContext(workspacePath, activeNovelId, activeChapterId).catch(
+      () => {}
+    );
+  }, [workspacePath, activeNovelId, activeChapterId]);
 
   useEffect(() => {
     if (sessionSaveTimer.current) clearTimeout(sessionSaveTimer.current);
@@ -543,6 +585,7 @@ function StoryLayoutInner({
 
           {/* Middle: Editor */}
           <StoryEditorPanel
+            ref={editorApiRef}
             focusMode={focusMode}
             onFocusToggle={() => setFocusMode(p => !p)}
             onSendToChat={openChatWithPrompt}

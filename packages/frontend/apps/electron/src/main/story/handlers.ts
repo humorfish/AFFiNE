@@ -71,6 +71,18 @@ function chapterPath(
   return join(chapterDir(workspacePath, novelId), `${chapterId}.md`);
 }
 
+function sessionDir(workspacePath: string, novelId: string): string {
+  return join(workspacePath, 'projects', novelId, '.ai-sessions');
+}
+
+function sessionPath(
+  workspacePath: string,
+  novelId: string,
+  chapterId: string
+): string {
+  return join(sessionDir(workspacePath, novelId), `${chapterId}.json`);
+}
+
 export const storyHandlers = {
   listChapters: async (
     _e: Electron.IpcMainInvokeEvent,
@@ -153,6 +165,64 @@ export const storyHandlers = {
     } catch (err: any) {
       if (err.code !== 'ENOENT') {
         logger.error('[story:deleteChapter]', err);
+      }
+    }
+  },
+
+  readChapterSession: async (
+    _e: Electron.IpcMainInvokeEvent,
+    workspacePath: string,
+    novelId: string,
+    chapterId: string
+  ): Promise<{
+    sessionId: string;
+    messages: Array<{ role: string; content: string }>;
+    updatedAt: string;
+  } | null> => {
+    const filePath = sessionPath(workspacePath, novelId, chapterId);
+    try {
+      const raw = await readFile(filePath, 'utf-8');
+      return JSON.parse(raw);
+    } catch (err: any) {
+      if (err.code === 'ENOENT') return null;
+      logger.error('[story:readChapterSession]', err);
+      return null;
+    }
+  },
+
+  writeChapterSession: async (
+    _e: Electron.IpcMainInvokeEvent,
+    workspacePath: string,
+    novelId: string,
+    chapterId: string,
+    data: {
+      sessionId: string;
+      messages: Array<{ role: string; content: string }>;
+    }
+  ): Promise<void> => {
+    const dir = sessionDir(workspacePath, novelId);
+    await mkdir(dir, { recursive: true });
+    const filePath = sessionPath(workspacePath, novelId, chapterId);
+    const payload = {
+      sessionId: data.sessionId,
+      messages: data.messages,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeFile(filePath, JSON.stringify(payload, null, 2), 'utf-8');
+  },
+
+  deleteChapterSession: async (
+    _e: Electron.IpcMainInvokeEvent,
+    workspacePath: string,
+    novelId: string,
+    chapterId: string
+  ): Promise<void> => {
+    const filePath = sessionPath(workspacePath, novelId, chapterId);
+    try {
+      await unlink(filePath);
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') {
+        logger.error('[story:deleteChapterSession]', err);
       }
     }
   },

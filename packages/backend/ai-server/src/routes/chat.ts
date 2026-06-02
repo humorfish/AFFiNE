@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 
-import type { StoryQueryEngine } from '../services/query-engine';
+import type { Scenario, StoryQueryEngine } from '../services/query-engine';
 import type { SessionStore } from '../services/session-store';
 
 export function createChatRouter(
@@ -16,15 +16,18 @@ export function createChatRouter(
       input?: string;
       messages?: Array<{ role: string; content: string }>;
       context?: Record<string, unknown>;
+      agent?: boolean;
+      scenario?: Scenario;
     };
 
     if (!body.sessionId) {
       return c.json({ error: 'sessionId is required' }, 400);
     }
 
-    // Accept either messages array or input string
-    const messages = body.messages?.length
-      ? body.messages
+    const useFrontendHistory = !!body.messages?.length;
+
+    const messages = useFrontendHistory
+      ? (body.messages ?? [])
       : body.input
         ? [{ role: 'user', content: body.input }]
         : null;
@@ -33,42 +36,56 @@ export function createChatRouter(
       return c.json({ error: 'messages or input is required' }, 400);
     }
 
-    const session = sessionStore.get(body.sessionId);
+    let session = sessionStore.get(body.sessionId);
     if (!session) {
-      return c.json({ error: 'Session not found' }, 404);
+      session = sessionStore.create(undefined, body.sessionId);
     }
 
-    // Store user messages
-    for (const msg of messages) {
-      sessionStore.addMessage(body.sessionId, msg);
+    if (!useFrontendHistory) {
+      for (const msg of messages) {
+        sessionStore.addMessage(body.sessionId, msg);
+      }
     }
-
-    const abortController = new AbortController();
 
     return streamSSE(c, async stream => {
       try {
         let fullResponse = '';
-        const allMessages = session.messages;
+        const allMessages = useFrontendHistory ? messages : session.messages;
 
         const chatStream = queryEngine.chat(
-          allMessages,
+          allMessages as Array<{ role: string; content: string }>,
           body.context,
-          abortController.signal
+          c.req.raw.signal,
+          body.agent,
+          body.scenario ?? 'chat'
         );
 
-        for await (const chunk of chatStream) {
-          fullResponse += chunk;
-          await stream.writeSSE({
-            event: 'message_delta',
-            data: JSON.stringify({ text: chunk }),
-          });
+        for await (const event of chatStream) {
+          if (event.type === 'text') {
+            fullResponse += event.data.text;
+            await stream.writeSSE({
+              event: 'message_delta',
+              data: JSON.stringify(event.data),
+            });
+          } else if (event.type === 'tool_use') {
+            await stream.writeSSE({
+              event: 'tool_use',
+              data: JSON.stringify(event.data),
+            });
+          } else if (event.type === 'tool_result') {
+            await stream.writeSSE({
+              event: 'tool_result',
+              data: JSON.stringify(event.data),
+            });
+          }
         }
 
-        // Store assistant response
-        sessionStore.addMessage(body.sessionId, {
-          role: 'assistant',
-          content: fullResponse,
-        });
+        if (!useFrontendHistory) {
+          sessionStore.addMessage(body.sessionId, {
+            role: 'assistant',
+            content: fullResponse,
+          });
+        }
 
         await stream.writeSSE({ event: 'done', data: '{}' });
       } catch (err) {
