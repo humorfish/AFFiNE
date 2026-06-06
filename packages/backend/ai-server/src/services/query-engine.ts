@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import { z } from 'zod/v4';
 
+import { SCENARIOS } from '../api/index';
+
 // ─────────────────────────────────────────────────────────────
 // Prompt templates per scenario
 // ─────────────────────────────────────────────────────────────
@@ -58,6 +60,12 @@ export function buildPrompt(
   options: BuildPromptOptions = {}
 ): string {
   const { context } = options;
+
+  // Check structured scenario registry first
+  const scenarioConfig = SCENARIOS[scenario];
+  if (scenarioConfig) {
+    return scenarioConfig.buildSystemPrompt(context);
+  }
 
   let systemPrompt = BASE_PROMPTS[scenario] ?? BASE_PROMPTS.chat;
 

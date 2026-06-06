@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 
+import { createAskRouter } from './routes/ask';
 import { createChatRouter } from './routes/chat';
 import { createSessionRouter } from './routes/sessions';
 import { StoryQueryEngine } from './services/query-engine';
@@ -29,6 +30,7 @@ async function main() {
 
   app.route('/api/ai/sessions', createSessionRouter(sessionStore));
   app.route('/api/ai/chat', createChatRouter(sessionStore, queryEngine));
+  app.route('/api/ai/ask', createAskRouter(queryEngine));
 
   app.get('/health', c => c.json({ status: 'ok' }));
 
