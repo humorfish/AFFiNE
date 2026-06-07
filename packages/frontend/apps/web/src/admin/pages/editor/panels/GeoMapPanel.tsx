@@ -11,14 +11,9 @@ import {
   useSystemPrompt,
 } from './panel-shared';
 import { z } from 'zod';
-import {
-  saveVersion,
-  saveGeneration,
-  saveData,
-  API_BASE,
-  getAuthHeaders,
-} from '../useWorldApi';
-import { GeoMapCanvas, GeoMapCanvasRef } from './GeoMapCanvas';
+import { API_BASE, getAuthHeaders } from '../useWorldApi';
+import { GeoMapCanvas } from './GeoMapCanvas';
+import type { GeoMapCanvasRef } from './GeoMapCanvas';
 import {
   NODE_TYPE_OPTIONS,
   CONNECTION_TYPES,
@@ -28,7 +23,7 @@ import {
   LEVEL_COLORS,
   LEVEL_TYPE_MAP,
 } from './geomap-constants';
-import type { 地图数据, 连线数据, 画布节点 } from './geomap-constants';
+import type { 地图数据, 连线数据, 画布节点, MapId } from './geomap-constants';
 
 // ── AI prompt/parsers (source lines 11392-13126, already correct) ──
 
@@ -468,17 +463,17 @@ export const GeoMapPanel: React.FC<Props> = ({
   const [地图列表, set地图列表] = useState<地图数据[]>([]);
   const [连线列表, set连线列表] = useState<连线数据[]>([]);
   const [loading, setLoading] = useState(false);
-  const [当前地图ID, set当前地图ID] = useState<number | null>(null);
-  const [选中节点ID, set选中节点ID] = useState<number | null>(null);
+  const [当前地图ID, set当前地图ID] = useState<MapId | null>(null);
+  const [选中节点ID, set选中节点ID] = useState<MapId | null>(null);
   const [选中连线ID, set选中连线ID] = useState<string | null>(null);
-  const [展开状态, set展开状态] = useState<Record<number, boolean>>({});
+  const [展开状态, set展开状态] = useState<Record<string, boolean>>({});
 
   // Edit form
   const [编辑表单, set编辑表单] = useState<{
     名称: string;
     类型: string;
     颜色: string;
-    父地图ID: number | null;
+    父地图ID: MapId | null;
     描述: string;
   } | null>(null);
   const [编辑连线表单, set编辑连线表单] = useState<{
@@ -519,7 +514,7 @@ export const GeoMapPanel: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [showAIDialog, setShowAIDialog] = useState(false);
   const [aiMode, setAiMode] = useState<AIMode>('submap');
-  const [aiSelectedLocations, setAiSelectedLocations] = useState<number[]>([]);
+  const [aiSelectedLocations, setAiSelectedLocations] = useState<MapId[]>([]);
   const [genResult, setGenResult] = useState<any>(null);
   const [genError, setGenError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
@@ -538,6 +533,7 @@ export const GeoMapPanel: React.FC<Props> = ({
   >([]);
 
   const canvasRef = useRef<GeoMapCanvasRef>(null);
+  const suppressMoveRef = useRef(false);
 
   // ── Data fetching ──
   useEffect(() => {
@@ -548,8 +544,17 @@ export const GeoMapPanel: React.FC<Props> = ({
     })
       .then(res => res.json())
       .then(result => {
-        if (result.success && Array.isArray(result.data))
+        if (result.success && Array.isArray(result.data)) {
           set地图列表(result.data);
+          // Auto-select the latest (highest ID) root map
+          const roots = result.data.filter((m: 地图数据) => !m.父地图ID);
+          if (roots.length > 0) {
+            const latest = roots.reduce((a: 地图数据, b: 地图数据) =>
+              (a.id as number) > (b.id as number) ? a : b
+            );
+            set当前地图ID(latest.id);
+          }
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -598,8 +603,8 @@ export const GeoMapPanel: React.FC<Props> = ({
   );
   const 画布节点列表 = useMemo((): 画布节点[] => {
     if (!当前地图ID) return [];
-    const ids = new Set<number>();
-    const collect = (pid: number) => {
+    const ids = new Set<MapId>();
+    const collect = (pid: MapId) => {
       地图列表
         .filter(m => m.父地图ID === pid)
         .forEach(c => {
@@ -626,8 +631,8 @@ export const GeoMapPanel: React.FC<Props> = ({
 
   const 可选父级 = useMemo(() => {
     if (!选中节点ID) return [];
-    const descendantIds = new Set<number>();
-    const collect = (pid: number) => {
+    const descendantIds = new Set<MapId>();
+    const collect = (pid: MapId) => {
       地图列表
         .filter(m => m.父地图ID === pid)
         .forEach(c => {
@@ -657,14 +662,11 @@ export const GeoMapPanel: React.FC<Props> = ({
       : [];
   }, [选中节点ID, 当前地图ID, 地图列表]);
 
-  // Auto-select first root
-  useEffect(() => {
-    if (根地图列表.length > 0 && !当前地图ID) set当前地图ID(根地图列表[0].id);
-  }, [根地图列表, 当前地图ID]);
+  // Auto-select handled in data fetching (latest root map)
 
   // ── CRUD ──
   const getChildren = useCallback(
-    (id: number) => 地图列表.filter(m => m.父地图ID === id),
+    (id: MapId) => 地图列表.filter(m => m.父地图ID === id),
     [地图列表]
   );
   const getAllNames = useCallback(
@@ -673,25 +675,45 @@ export const GeoMapPanel: React.FC<Props> = ({
   );
 
   const handleAdd = useCallback(
-    (parentId: number | null) => {
-      const newId = Math.max(0, ...地图列表.map(m => m.id)) + 1;
+    async (parentId: MapId | null) => {
+      if (!projectId) return;
       const parent = parentId ? 地图列表.find(m => m.id === parentId) : null;
-      const newMap: 地图数据 = {
-        id: newId,
-        地图名称: `新地点${newId}`,
-        地图描述: '',
-        父地图ID: parentId,
-        地图类型: 'landmark',
-        地图等级: parent ? parent.地图等级 + 1 : 0,
-      };
-      set地图列表(prev => [...prev, newMap]);
-      set选中节点ID(newId);
+      const level = parent ? parent.地图等级 + 1 : 0;
+      try {
+        const r = await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/map`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              地图名称: '新地点',
+              地图描述: '',
+              父地图ID: parentId,
+              地图类型: 'landmark',
+              地图等级: level,
+            }),
+          }
+        );
+        const res = await r.json();
+        if (res.success && res.data?.id) {
+          const newMap: 地图数据 = {
+            id: res.data.id,
+            地图名称: '新地点',
+            地图描述: '',
+            父地图ID: parentId,
+            地图类型: 'landmark',
+            地图等级: level,
+          };
+          set地图列表(prev => [...prev, newMap]);
+          set选中节点ID(res.data.id);
+        }
+      } catch {}
     },
-    [地图列表]
+    [地图列表, projectId]
   );
 
   const handleDelete = useCallback(
-    async (id: number) => {
+    async (id: MapId) => {
       const map = 地图列表.find(m => m.id === id);
       if (!map) return;
       const childCount = 地图列表.filter(m => m.父地图ID === id).length;
@@ -700,8 +722,8 @@ export const GeoMapPanel: React.FC<Props> = ({
         msg += `\n\n⚠️ 此地图包含 ${childCount} 个子地图，将一并删除！`;
       msg += '\n\n此操作不可恢复。';
       if (!confirm(msg)) return;
-      const idsToRemove = new Set<number>();
-      const collect = (pid: number) => {
+      const idsToRemove = new Set<MapId>();
+      const collect = (pid: MapId) => {
         idsToRemove.add(pid);
         地图列表.filter(m => m.父地图ID === pid).forEach(c => collect(c.id));
       };
@@ -710,9 +732,15 @@ export const GeoMapPanel: React.FC<Props> = ({
       if (选中节点ID === id) set选中节点ID(null);
       if (projectId) {
         try {
-          await saveData('geomap', projectId, {
-            items: 地图列表.filter(m => !idsToRemove.has(m.id)),
-          });
+          for (const rid of idsToRemove) {
+            await fetch(
+              `${API_BASE}/api/geo-maps/project/${projectId}/map/${rid}`,
+              {
+                method: 'DELETE',
+                headers: getAuthHeaders(),
+              }
+            );
+          }
         } catch {}
       }
     },
@@ -720,25 +748,50 @@ export const GeoMapPanel: React.FC<Props> = ({
   );
 
   const handleSave = useCallback(async () => {
-    if (!选中节点ID || !编辑表单) return;
-    const updated = 地图列表.map(m =>
-      m.id === 选中节点ID
-        ? {
-            ...m,
+    if (!选中节点ID || !编辑表单 || !projectId) return;
+    const map = 地图列表.find(m => m.id === 选中节点ID);
+    try {
+      // Step 1: 更新地图基本信息 (source: t.更新地图信息 → C() → tl.update)
+      await fetch(
+        `${API_BASE}/api/geo-maps/project/${projectId}/map/${选中节点ID}`,
+        {
+          method: 'PUT',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
             地图名称: 编辑表单.名称,
             地图类型: 编辑表单.类型,
             地图描述: 编辑表单.描述,
-            父地图ID: 编辑表单.父地图ID,
-            地图内容: { ...(m.地图内容 || {}), 颜色: 编辑表单.颜色 },
+            父地图ID: 编辑表单.父地图ID || null,
+          }),
+        }
+      );
+      // Step 2: 更新地图内容（颜色等） (source: t.保存地图内容到后端 → Z() → tl.update)
+      if (map) {
+        const 地图内容 = { ...(map.地图内容 || {}), 颜色: 编辑表单.颜色 };
+        await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/map/${选中节点ID}`,
+          {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ 地图内容: JSON.stringify(地图内容) }),
           }
-        : m
-    );
-    set地图列表(updated);
-    if (projectId) {
-      try {
-        await saveData('geomap', projectId, { items: updated });
-      } catch {}
-    }
+        );
+        set地图列表(prev =>
+          prev.map(m =>
+            m.id === 选中节点ID
+              ? {
+                  ...m,
+                  地图名称: 编辑表单.名称,
+                  地图类型: 编辑表单.类型,
+                  地图描述: 编辑表单.描述,
+                  父地图ID: 编辑表单.父地图ID,
+                  地图内容,
+                }
+              : m
+          )
+        );
+      }
+    } catch {}
   }, [选中节点ID, 编辑表单, 地图列表, projectId]);
 
   const handleSaveConnection = useCallback(async () => {
@@ -755,43 +808,81 @@ export const GeoMapPanel: React.FC<Props> = ({
     set连线列表(updated);
   }, [选中连线ID, 编辑连线表单, 连线列表]);
 
-  // ── Node move from canvas ──
-  const handleNodeMove = useCallback((id: number, x: number, y: number) => {
-    set地图列表(prev =>
-      prev.map(m =>
-        m.id === id
-          ? { ...m, 地图内容: { ...(m.地图内容 || {}), x, y }, x, y }
-          : m
-      )
-    );
-  }, []);
+  // ── Node move from canvas (source: ee() with 300ms debounce) ──
+  const moveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleNodeMove = useCallback(
+    (id: MapId, x: number, y: number) => {
+      // Always update state (needed for canvas rendering)
+      set地图列表(prev =>
+        prev.map(m =>
+          m.id === id
+            ? { ...m, 地图内容: { ...(m.地图内容 || {}), x, y }, x, y }
+            : m
+        )
+      );
+      // Suppress PUT during AI generation (suppressMoveRef)
+      if (suppressMoveRef.current) return;
+      // Debounced save
+      if (moveTimerRef.current) clearTimeout(moveTimerRef.current);
+      moveTimerRef.current = setTimeout(() => {
+        if (!projectId) return;
+        fetch(`${API_BASE}/api/geo-maps/project/${projectId}/map/${id}`, {
+          method: 'PUT',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ 地图内容: JSON.stringify({ x, y }) }),
+        }).catch(() => {});
+      }, 300);
+    },
+    [projectId, 地图列表]
+  );
 
   const handleNodeAdd = useCallback(
-    (x: number, y: number) => {
-      const newId = Math.max(0, ...地图列表.map(m => m.id)) + 1;
-      const newMap: 地图数据 = {
-        id: newId,
-        地图名称: `新地点${newId}`,
-        地图描述: '',
-        父地图ID: 当前地图ID,
-        地图类型: 'landmark',
-        地图等级: (当前地图?.地图等级 || -1) + 1,
-        地图内容: { x, y },
-        x,
-        y,
-      };
-      set地图列表(prev => [...prev, newMap]);
-      set选中节点ID(newId);
+    async (x: number, y: number) => {
+      if (!projectId) return;
+      const level = (当前地图?.地图等级 || -1) + 1;
+      try {
+        const r = await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/map`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              地图名称: '新地点',
+              地图描述: '',
+              父地图ID: 当前地图ID,
+              地图类型: 'landmark',
+              地图等级: level,
+            }),
+          }
+        );
+        const res = await r.json();
+        if (res.success && res.data?.id) {
+          const newMap: 地图数据 = {
+            id: res.data.id,
+            地图名称: '新地点',
+            地图描述: '',
+            父地图ID: 当前地图ID,
+            地图类型: 'landmark',
+            地图等级: level,
+            地图内容: { x, y },
+            x,
+            y,
+          };
+          set地图列表(prev => [...prev, newMap]);
+          set选中节点ID(res.data.id);
+        }
+      } catch {}
     },
-    [地图列表, 当前地图ID, 当前地图]
+    [当前地图ID, 当前地图, projectId]
   );
 
   // ── Tree ──
   const toggleExpand = useCallback(
-    (id: number) =>
+    (id: MapId) =>
       set展开状态(prev => ({
         ...prev,
-        [id]: prev[id] === undefined ? false : !prev[id],
+        [String(id)]:
+          prev[String(id)] === undefined ? false : !prev[String(id)],
       })),
     []
   );
@@ -799,9 +890,9 @@ export const GeoMapPanel: React.FC<Props> = ({
     () => set展开集合(new Set(地图列表.map(m => m.id))),
     [地图列表]
   );
-  const set展开集合 = useCallback((ids: Set<number>) => {
-    const s: Record<number, boolean> = {};
-    ids.forEach(id => (s[id] = true));
+  const set展开集合 = useCallback((ids: Set<MapId>) => {
+    const s: Record<string, boolean> = {};
+    ids.forEach(id => (s[String(id)] = true));
     set展开状态(s);
   }, []);
 
@@ -1072,7 +1163,7 @@ export const GeoMapPanel: React.FC<Props> = ({
 
   // Robust name → id lookup: exact → trimmed → includes
   const findIdByName = useCallback(
-    (name: string, nameMap: Map<string, number>): number | undefined => {
+    (name: string, nameMap: Map<string, MapId>): MapId | undefined => {
       const trimmed = name.trim();
       if (!trimmed) return undefined;
       // Exact match
@@ -1096,95 +1187,214 @@ export const GeoMapPanel: React.FC<Props> = ({
     []
   );
 
-  const adoptResult = useCallback(() => {
+  const adoptResult = useCallback(async () => {
     if (!genResult || !projectId) return;
+    // Suppress handleNodeMove PUTs during AI generation
+    suppressMoveRef.current = true;
     try {
-      let merged = [...地图列表];
-      const nextId = (items: 地图数据[]) =>
-        Math.max(0, ...items.map(m => m.id)) + 1;
+      // Step 0: Fetch worldview data for generations POST (source: GET /api/geo-maps/project/{id}/worldview)
+      let 世界观信息: Record<string, string> | null = null;
+      try {
+        const wvRes = await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/worldview`,
+          {
+            headers: getAuthHeaders(),
+          }
+        );
+        const wvData = await wvRes.json();
+        if (wvData.success && wvData.data) {
+          const fields: Record<string, string> = {};
+          for (const [k, v] of Object.entries(wvData.data)) {
+            if (typeof v === 'string') fields[k] = v;
+          }
+          世界观信息 = fields;
+        }
+      } catch {}
+
+      // Step 1: POST generations — save generation record (BEFORE creating maps)
+      let generationId: number | null = null;
+      try {
+        const gr = await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/generations`,
+          {
+            method: 'POST',
+            headers: {
+              ...getAuthHeaders(),
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+              提示词: aiPrompt || '',
+              世界观信息: 世界观信息 || {},
+              生成内容: genResult.data?.数据 || {},
+              生成类型: 'hierarchy',
+              地图ID: genResult.parentId || null,
+            }),
+          }
+        );
+        const gRes = await gr.json();
+        if (gRes.success && gRes.data?.id) generationId = gRes.data.id;
+      } catch {}
+
+      // Step 2: POST maps — create each node sequentially
+      const postNode = async (
+        name: string,
+        desc: string,
+        parentId: number | null,
+        type: string,
+        level: number
+      ): Promise<number | null> => {
+        try {
+          const r = await fetch(
+            `${API_BASE}/api/geo-maps/project/${projectId}/map`,
+            {
+              method: 'POST',
+              headers: {
+                ...getAuthHeaders(),
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({
+                地图名称: name,
+                地图描述: desc,
+                父地图ID: parentId,
+                地图类型: type,
+                地图等级: level,
+              }),
+            }
+          );
+          const res = await r.json();
+          return res.success && res.data?.id ? res.data.id : null;
+        } catch {
+          return null;
+        }
+      };
+
       let newRootId: number | null = null;
+      let firstContinentId: number | null = null;
+      let firstRegionId: number | null = null;
+      const newNodes: 地图数据[] = [];
       const newConnections: 连线数据[] = [];
+      const nameToId = new Map<string, number>();
+
       if (genResult.mode === 'world' && genResult.data?.数据) {
         const world = genResult.data.数据 as 世界地图生成结果;
-        let id = nextId(merged);
-        const worldId = id;
+        const worldId = await postNode(
+          world.地图名称,
+          world.地图描述,
+          null,
+          '世界',
+          0
+        );
+        if (!worldId) return;
         newRootId = worldId;
-        merged.push({
-          id,
+        nameToId.set(world.地图名称.trim(), worldId);
+        newNodes.push({
+          id: worldId,
           地图名称: world.地图名称,
           地图描述: world.地图描述,
           父地图ID: null,
-          地图类型: 'world',
+          地图类型: '世界',
           地图等级: 0,
         });
-        const allNew: 地图数据[] = [];
+
         for (const cont of world.大陆列表 || []) {
-          const cid = ++id;
-          const contNode: 地图数据 = {
+          const cid = await postNode(
+            cont.地图名称,
+            cont.地图描述,
+            worldId,
+            '大陆',
+            1
+          );
+          if (!cid) continue;
+          if (!firstContinentId) firstContinentId = cid;
+          nameToId.set(cont.地图名称.trim(), cid);
+          newNodes.push({
             id: cid,
             地图名称: cont.地图名称,
             地图描述: cont.地图描述,
             父地图ID: worldId,
-            地图类型: 'continent',
+            地图类型: '大陆',
             地图等级: 1,
-          };
-          merged.push(contNode);
-          allNew.push(contNode);
+          });
+
           for (const reg of cont.区域列表 || []) {
-            const rid = ++id;
-            const regNode: 地图数据 = {
+            const rid = await postNode(
+              reg.地图名称,
+              reg.地图描述,
+              cid,
+              '区域',
+              2
+            );
+            if (!rid) continue;
+            if (!firstRegionId) firstRegionId = rid;
+            nameToId.set(reg.地图名称.trim(), rid);
+            newNodes.push({
               id: rid,
               地图名称: reg.地图名称,
               地图描述: reg.地图描述,
               父地图ID: cid,
-              地图类型: 'region',
+              地图类型: '区域',
               地图等级: 2,
-            };
-            merged.push(regNode);
-            allNew.push(regNode);
+            });
+
             for (const city of reg.城市列表 || []) {
-              const ctid = ++id;
-              const cityNode: 地图数据 = {
+              const ctid = await postNode(
+                city.地图名称,
+                city.地图描述,
+                rid,
+                '城市',
+                3
+              );
+              if (!ctid) continue;
+              nameToId.set(city.地图名称.trim(), ctid);
+              newNodes.push({
                 id: ctid,
                 地图名称: city.地图名称,
                 地图描述: city.地图描述,
                 父地图ID: rid,
-                地图类型: 'city',
+                地图类型: '城市',
                 地图等级: 3,
-              };
-              merged.push(cityNode);
-              allNew.push(cityNode);
+              });
+
               for (const loc of city.地点列表 || []) {
-                const lid = ++id;
-                const locNode: 地图数据 = {
+                const lid = await postNode(
+                  loc.地图名称,
+                  loc.地图描述,
+                  ctid,
+                  '地点',
+                  4
+                );
+                if (!lid) continue;
+                nameToId.set(loc.地图名称.trim(), lid);
+                newNodes.push({
                   id: lid,
                   地图名称: loc.地图名称,
                   地图描述: loc.地图描述,
                   父地图ID: ctid,
-                  地图类型: 'location',
+                  地图类型: '地点',
                   地图等级: 4,
-                };
-                merged.push(locNode);
-                allNew.push(locNode);
+                });
               }
             }
           }
         }
-        // 路线节点 + 连线 — build name map from all generated nodes
-        const nameToId = new Map<string, number>();
-        allNew.forEach(n => nameToId.set(n.地图名称.trim(), n.id));
+        // Routes: real website uses first REGION ID as parent (source: 父地图ID=区域级)
+        const routeParentId = firstRegionId || firstContinentId || worldId;
         for (const route of world.路线列表 || []) {
-          const rid = ++id;
-          const routeParent =
-            allNew.find(n => n.地图等级 === 2) ||
-            allNew.find(n => n.地图等级 === 3) ||
-            allNew[0];
-          merged.push({
+          const routeDesc = `${route.描述 || ''}\n起点：${route.起点}\n终点：${route.终点}`;
+          const rid = await postNode(
+            route.名称,
+            routeDesc,
+            routeParentId,
+            '路线',
+            5
+          );
+          if (!rid) continue;
+          newNodes.push({
             id: rid,
             地图名称: route.名称,
-            地图描述: route.描述 || '',
-            父地图ID: routeParent?.id || worldId,
-            地图类型: 'route',
+            地图描述: routeDesc,
+            父地图ID: routeParentId,
+            地图类型: '路线',
             地图等级: 5,
           });
           const fromId = findIdByName(route.起点, nameToId);
@@ -1201,34 +1411,49 @@ export const GeoMapPanel: React.FC<Props> = ({
         }
       } else if (genResult.mode === 'submap' && genResult.data?.数据) {
         const subData = genResult.data.数据 as 子地图生成结果;
-        let id = nextId(merged);
         const newSubIds = new Map<string, number>();
         for (const sub of subData.子地图列表 || []) {
-          const sid = ++id;
-          merged.push({
+          const sid = await postNode(
+            sub.地图名称,
+            sub.地图描述 || '',
+            genResult.parentId,
+            sub.地图类型 === '子地图' ? '地点' : sub.地图类型,
+            genResult.parentLevel + 1
+          );
+          if (!sid) continue;
+          newSubIds.set(sub.地图名称.trim(), sid);
+          newNodes.push({
             id: sid,
             地图名称: sub.地图名称,
             地图描述: sub.地图描述 || '',
             父地图ID: genResult.parentId,
-            地图类型: sub.地图类型 === '子地图' ? 'location' : sub.地图类型,
+            地图类型: sub.地图类型 === '子地图' ? '地点' : sub.地图类型,
             地图等级: genResult.parentLevel + 1,
           });
-          newSubIds.set(sub.地图名称.trim(), sid);
         }
-        // Also include existing sibling nodes for route matching
         const existingSiblings = new Map<string, number>();
         地图列表
           .filter(m => m.父地图ID === genResult.parentId)
-          .forEach(m => existingSiblings.set(m.地图名称.trim(), m.id));
+          .forEach(m =>
+            existingSiblings.set(m.地图名称.trim(), m.id as number)
+          );
         newSubIds.forEach((v, k) => existingSiblings.set(k, v));
         for (const route of subData.路线列表 || []) {
-          const rid = ++id;
-          merged.push({
+          const routeDesc = `${route.地图描述 || ''}\n起点：${route.起点}\n终点：${route.终点}`;
+          const rid = await postNode(
+            route.地图名称,
+            routeDesc,
+            genResult.parentId,
+            '路线',
+            genResult.parentLevel + 1
+          );
+          if (!rid) continue;
+          newNodes.push({
             id: rid,
             地图名称: route.地图名称,
-            地图描述: route.地图描述 || '',
+            地图描述: routeDesc,
             父地图ID: genResult.parentId,
-            地图类型: 'route',
+            地图类型: '路线',
             地图等级: genResult.parentLevel + 1,
           });
           const fromId = findIdByName(route.起点, existingSiblings);
@@ -1245,17 +1470,26 @@ export const GeoMapPanel: React.FC<Props> = ({
         }
       } else if (genResult.mode === 'route' && genResult.data?.数据) {
         const routeData = genResult.data.数据 as 子地图生成结果;
-        let id = nextId(merged);
         const existingIds = new Map<string, number>();
-        地图列表.forEach(m => existingIds.set(m.地图名称.trim(), m.id));
+        地图列表.forEach(m =>
+          existingIds.set(m.地图名称.trim(), m.id as number)
+        );
         for (const route of routeData.路线列表 || []) {
-          const rid = ++id;
-          merged.push({
+          const routeDesc = `${route.地图描述 || ''}\n起点：${route.起点}\n终点：${route.终点}`;
+          const rid = await postNode(
+            route.地图名称,
+            routeDesc,
+            genResult.parentId,
+            '路线',
+            5
+          );
+          if (!rid) continue;
+          newNodes.push({
             id: rid,
             地图名称: route.地图名称,
-            地图描述: route.地图描述 || '',
+            地图描述: routeDesc,
             父地图ID: genResult.parentId,
-            地图类型: 'route',
+            地图类型: '路线',
             地图等级: 5,
           });
           const fromId = findIdByName(route.起点, existingIds);
@@ -1271,24 +1505,64 @@ export const GeoMapPanel: React.FC<Props> = ({
           }
         }
       }
-      // Batch all connection updates into one setState call
-      if (newConnections.length > 0) {
+
+      // Update state
+      if (newNodes.length > 0) set地图列表(prev => [...prev, ...newNodes]);
+      if (newConnections.length > 0)
         set连线列表(prev => [...prev, ...newConnections]);
+      if (newRootId) set当前地图ID(newRootId);
+
+      // Step 2.5: PUT adopt — only for submap/route modes
+      if (generationId && genResult.mode !== 'world') {
+        try {
+          await fetch(
+            `${API_BASE}/api/geo-maps/project/${projectId}/generations/${generationId}/adopt`,
+            {
+              method: 'PUT',
+              headers: getAuthHeaders(),
+            }
+          );
+        } catch {}
       }
-      set地图列表(merged);
+
+      // Step 3: PUT last node's position (after canvas layout)
+      const lastNodeId = newNodes[newNodes.length - 1]?.id;
+      setTimeout(() => {
+        canvasRef.current?.适配全景();
+        setTimeout(async () => {
+          if (lastNodeId && projectId) {
+            set地图列表(prev => {
+              const node = prev.find(m => m.id === lastNodeId);
+              if (node?.x != null && node?.y != null) {
+                fetch(
+                  `${API_BASE}/api/geo-maps/project/${projectId}/map/${lastNodeId}`,
+                  {
+                    method: 'PUT',
+                    headers: {
+                      ...getAuthHeaders(),
+                      'content-type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                      地图内容: JSON.stringify({ x: node.x, y: node.y }),
+                    }),
+                  }
+                ).catch(() => {});
+              }
+              return prev;
+            });
+          }
+          // Re-enable handleNodeMove PUT after all done
+          suppressMoveRef.current = false;
+        }, 500);
+      }, 200);
+
       setShowAIDialog(false);
       setGenResult(null);
-      // Auto-select new world map
-      if (newRootId) set当前地图ID(newRootId);
-      saveVersion('geomap', projectId, {
-        描述: `AI生成${genResult.mode === 'world' ? '世界地图' : genResult.mode === 'submap' ? '子地图' : '路线'}`,
-        内容: merged,
-      }).catch(() => {});
-      setTimeout(() => canvasRef.current?.适配全景(), 100);
     } catch (e) {
       console.error('adoptResult error:', e);
+      suppressMoveRef.current = false;
     }
-  }, [genResult, 地图列表, projectId, findIdByName]);
+  }, [genResult, 地图列表, projectId, findIdByName, aiPrompt]);
 
   // ── Layout mode ──
   const setLayoutModeAndSave = useCallback(
@@ -1308,7 +1582,7 @@ export const GeoMapPanel: React.FC<Props> = ({
 
   // ── Node name helper ──
   const getNodeName = useCallback(
-    (id: number) => 地图列表.find(m => m.id === id)?.地图名称 || '未知',
+    (id: MapId) => 地图列表.find(m => m.id === id)?.地图名称 || '未知',
     [地图列表]
   );
 
@@ -1727,7 +2001,7 @@ export const GeoMapPanel: React.FC<Props> = ({
                     <label>描述</label>
                     <textarea
                       rows={3}
-                      value={编辑表单.描述}
+                      value={编辑表单.描述 ?? ''}
                       onChange={e =>
                         set编辑表单(prev =>
                           prev ? { ...prev, 描述: e.target.value } : null
@@ -1818,11 +2092,11 @@ export const GeoMapPanel: React.FC<Props> = ({
                 <>
                   <div className="连线端点显示">
                     {getNodeName(
-                      连线列表.find(c => c.id === 选中连线ID)?.起点ID || 0
+                      连线列表.find(c => c.id === 选中连线ID)?.起点ID || ''
                     )}{' '}
                     →{' '}
                     {getNodeName(
-                      连线列表.find(c => c.id === 选中连线ID)?.终点ID || 0
+                      连线列表.find(c => c.id === 选中连线ID)?.终点ID || ''
                     )}
                   </div>
                   <div className="form-group">
