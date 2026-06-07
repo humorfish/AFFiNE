@@ -81,15 +81,22 @@ export function worldviewUserPrompt(input: string): string {
 export function worldviewSectionPrompt(
   fieldName: string,
   existingData: Record<string, string>,
-  userInput?: string,
+  userInput?: string
 ): { system: string; user: string } {
   const existingFields = Object.entries(existingData)
     .map(([k, v]) => `${k}：${v}`)
     .join('\n');
 
-  const user = `基于以下已有世界观设定，请生成"${fieldName}"部分的详细内容。\n\n已有设定：\n${existingFields}\n\n用户补充要求：${userInput || '请根据已有设定生成合适的内容'}\n\n只需要返回一个JSON对象，只包含"${fieldName}"字段及其内容。`;
+  const SECTION_SYSTEM = `你是一位专业的小说世界观设定师。用户会给你已有世界观的部分设定，请你根据这些设定为指定字段生成合适的内容。
 
-  return { system: SYSTEM_PROMPT, user };
+【输出要求】
+- 只输出一个JSON对象，只包含被要求生成的字段
+- 内容要与已有设定保持一致和连贯
+- 不要输出任何其他内容`;
+
+  const user = `基于以下已有世界观设定，请生成"${fieldName}"部分的详细内容。\n\n已有设定：\n${existingFields}\n\n用户补充要求：${userInput || '请根据已有设定生成合适的内容'}\n\n只需要返回一个JSON对象，只包含"${fieldName}"字段及其内容。例如：{"${fieldName}": "生成的内容"}`;
+
+  return { system: SECTION_SYSTEM, user };
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +148,10 @@ function parseWorldviewCompact(text: string): Record<string, any> | null {
     // CAL_ERA|纪年名称1,纪年名称2,...
     const eraParts = parsePipeLine(line, 'CAL_ERA|');
     if (eraParts) {
-      const eras = (eraParts[0] || '').split(',').map(s => s.trim()).filter(Boolean);
+      const eras = (eraParts[0] || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
       if (data['历法']) (data['历法'] as any).纪年体系 = eras;
       foundAny = true;
       continue;
@@ -150,7 +160,10 @@ function parseWorldviewCompact(text: string): Record<string, any> | null {
     // CAL_TIME|时辰名称1,时辰名称2,...
     const timeParts = parsePipeLine(line, 'CAL_TIME|');
     if (timeParts) {
-      const times = (timeParts[0] || '').split(',').map(s => s.trim()).filter(Boolean);
+      const times = (timeParts[0] || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
       if (data['历法']) (data['历法'] as any).时辰名称 = times;
       foundAny = true;
       continue;
@@ -182,15 +195,17 @@ function parseWorldviewCompact(text: string): Record<string, any> | null {
   return foundAny ? data : null;
 }
 
-export function parseWorldview(
-  text: string,
-): { data: Record<string, any> | null; failed: boolean; raw?: string } {
+export function parseWorldview(text: string): {
+  data: Record<string, any> | null;
+  failed: boolean;
+  raw?: string;
+} {
   return parseWithFallback(text, parseWorldviewCompact);
 }
 
 export function parseWorldviewSection(
   text: string,
-  _fieldName: string,
+  _fieldName: string
 ): { data: Record<string, string> | null; failed: boolean; raw?: string } {
   // Section generation returns JSON, so we only need JSON fallback
   return parseWithFallback<Record<string, string>>(text, () => null);

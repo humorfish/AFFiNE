@@ -1,7 +1,25 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useWorldApi } from '../useWorldApi';
-import { useAIGenerate, parseAIJSON } from './panel-shared';
+import { z } from 'zod';
+import { useWorldApi, saveVersion } from '../useWorldApi';
+import {
+  useAIGenerate,
+  parseAIJSON,
+  useAIFieldGenerate,
+  useAIFullGenerate,
+  AIGenerationDialog,
+  useSystemPrompt,
+  AIButton,
+  TypeOption,
+  QuickTemplate,
+  generateValidated,
+} from './panel-shared';
+import {
+  saveGeneration,
+  saveData,
+  API_BASE,
+  getAuthHeaders,
+} from '../useWorldApi';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -47,6 +65,287 @@ interface Props {
   onClose: () => void;
   leftOffset?: number;
 }
+
+/* ─── Pipe-format prompt & parser for sidestories ─── */
+
+/** Parse pipe-delimited format like: 支线概述|xxx\n关键转折|xxx\n主线关联|xxx */
+function parseSidestoryPipe(text: string): Record<string, string> | null {
+  const lines = text.split('\n').filter(l => l.trim());
+  const result: Record<string, string> = {};
+  const fieldMap: Record<string, string> = {
+    支线概述: '支线概述',
+    关键转折: '关键转折',
+    主线关联: '主线关联',
+  };
+  for (const line of lines) {
+    const t = line.trim();
+    const pipeIdx = t.indexOf('|');
+    if (pipeIdx > 0) {
+      const key = t.substring(0, pipeIdx).trim();
+      const val = t.substring(pipeIdx + 1).trim();
+      if (fieldMap[key] && val) {
+        result[fieldMap[key]] = val;
+      }
+    }
+  }
+  return result.支线概述 || result.关键转折 || result.主线关联 ? result : null;
+}
+
+/** Combined parser: pipe first, then JSON fallback */
+function parseSidestoryResponse(text: string): Record<string, string> | null {
+  if (!text) return null;
+  const pipe = parseSidestoryPipe(text.trim());
+  if (pipe && (pipe.支线概述 || pipe.关键转折 || pipe.主线关联)) return pipe;
+  try {
+    return JSON.parse(text);
+  } catch {}
+  const codeMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+  if (codeMatch)
+    try {
+      return JSON.parse(codeMatch[1]);
+    } catch {}
+  const braceMatch = text.match(/\{[\s\S]*\}/);
+  if (braceMatch)
+    try {
+      return JSON.parse(braceMatch[0]);
+    } catch {}
+  return null;
+}
+
+/** Build system prompt for event-flow generation (七要素 pipe format) */
+function buildEventFlowSystemPrompt(): string {
+  return `你是一个专业的小说创作助手。请根据给定的信息生成支线故事事件流。
+
+输出格式要求（严格按此格式）：
+每个事件用 === 分隔，事件内每行格式为：
+名称|事件名称
+序号|数字
+卷id|数字
+欲望|描述
+阻碍|描述
+行动|描述
+结果|描述
+意外|描述
+转折|描述
+结局|描述
+
+不要输出JSON，不要输出markdown代码块标记。`;
+}
+
+/** Parse pipe-delimited event-flow format (events separated by ===) */
+function parseEventFlowPipe(text: string): Array<Partial<事件数据>> | null {
+  const blocks = text
+    .split(/===+/)
+    .map(b => b.trim())
+    .filter(Boolean);
+  if (blocks.length === 0) return null;
+  const events: Array<Partial<事件数据>> = [];
+  const fieldMap: Record<string, string> = {
+    名称: '名称',
+    序号: '序号',
+    卷id: '卷id',
+    欲望: '欲望',
+    阻碍: '阻碍',
+    行动: '行动',
+    结果: '结果',
+    意外: '意外',
+    转折: '转折',
+    结局: '结局',
+    涉及支线: '涉及支线',
+    暗线伏笔: '暗线伏笔',
+  };
+  for (const block of blocks) {
+    const lines = block.split('\n').filter(l => l.trim());
+    const evt: Record<string, any> = {};
+    for (const line of lines) {
+      const pipeIdx = line.indexOf('|');
+      if (pipeIdx > 0) {
+        const key = line.substring(0, pipeIdx).trim();
+        const val = line.substring(pipeIdx + 1).trim();
+        const mapped = fieldMap[key];
+        if (mapped && val) {
+          evt[mapped] = val;
+        }
+      }
+    }
+    if (evt['名称'] || evt['序号']) {
+      // Convert numeric fields
+      if (evt['序号']) evt['序号'] = Number(evt['序号']) || 0;
+      if (evt['卷id']) evt['卷id'] = Number(evt['卷id']) || 0;
+      // Wrap 七要素 into {内容, 章节关联: []}
+      for (const k of [
+        '欲望',
+        '阻碍',
+        '行动',
+        '结果',
+        '意外',
+        '转折',
+        '结局',
+      ]) {
+        if (typeof evt[k] === 'string') {
+          evt[k] = { 内容: evt[k], 章节关联: [] };
+        }
+      }
+      events.push(evt as Partial<事件数据>);
+    }
+  }
+  return events.length > 0 ? events : null;
+}
+
+/** Combined parser for event flow: pipe first, then JSON fallback */
+function parseEventFlowResponse(text: string): Array<Partial<事件数据>> | null {
+  if (!text) return null;
+  const pipeResult = parseEventFlowPipe(text.trim());
+  if (pipeResult && pipeResult.length > 0) return pipeResult;
+  // JSON fallback
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  const codeMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+  if (codeMatch)
+    try {
+      const parsed = JSON.parse(codeMatch[1]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  const bracketMatch = text.match(/\[[\s\S]*\]/);
+  if (bracketMatch)
+    try {
+      const parsed = JSON.parse(bracketMatch[0]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  return null;
+}
+
+/** Build system prompt for chapter-association recommendation */
+function buildChapterAssocSystemPrompt(): string {
+  return `你是一个专业的小说创作助手。请为事件要素智能推荐关联章节。
+
+输出格式要求（严格按此格式）：
+每个关联推荐用 --- 分隔，推荐内容格式：
+章节序号|数字
+章节标题|标题文字
+要点|关联要点描述
+
+不要输出JSON，不要输出markdown代码块标记。`;
+}
+
+/** Parse pipe-delimited chapter association format */
+function parseChapterAssocPipe(
+  text: string
+): Array<{ 章节序号: number; 章节标题: string; 要点: string }> | null {
+  const blocks = text
+    .split(/---+/)
+    .map(b => b.trim())
+    .filter(Boolean);
+  if (blocks.length === 0) return null;
+  const results: Array<{ 章节序号: number; 章节标题: string; 要点: string }> =
+    [];
+  for (const block of blocks) {
+    const lines = block.split('\n').filter(l => l.trim());
+    let 章节序号 = 0,
+      章节标题 = '',
+      要点 = '';
+    for (const line of lines) {
+      const pipeIdx = line.indexOf('|');
+      if (pipeIdx > 0) {
+        const key = line.substring(0, pipeIdx).trim();
+        const val = line.substring(pipeIdx + 1).trim();
+        if (key === '章节序号') 章节序号 = Number(val) || 0;
+        else if (key === '章节标题') 章节标题 = val;
+        else if (key === '要点') 要点 = val;
+      }
+    }
+    if (章节标题 || 要点) {
+      results.push({ 章节序号, 章节标题, 要点 });
+    }
+  }
+  return results.length > 0 ? results : null;
+}
+
+/** Combined parser for chapter association: pipe first, then JSON fallback */
+function parseChapterAssocResponse(
+  text: string
+): Array<{ 章节序号: number; 章节标题: string; 要点: string }> | null {
+  if (!text) return null;
+  const pipeResult = parseChapterAssocPipe(text.trim());
+  if (pipeResult && pipeResult.length > 0) return pipeResult;
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  const codeMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+  if (codeMatch)
+    try {
+      const parsed = JSON.parse(codeMatch[1]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  const bracketMatch = text.match(/\[[\s\S]*\]/);
+  if (bracketMatch)
+    try {
+      const parsed = JSON.parse(bracketMatch[0]);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {}
+  return null;
+}
+
+/* ─── AI Generation Config ─── */
+
+const sidestoriesTypeOptions: TypeOption[] = [
+  { 名称: '人物外传', 图标: 'ri-user-heart-line', 颜色: '#ec4899' },
+  { 名称: '前传故事', 图标: 'ri-rewind-line', 颜色: '#8b5cf6' },
+  { 名称: '平行世界', 图标: 'ri-portal-line', 颜色: '#3b82f6' },
+  { 名称: '番外篇', 图标: 'ri-gift-line', 颜色: '#f59e0b' },
+  { 名称: '隐藏剧情', 图标: 'ri-key-2-line', 颜色: '#22c55e' },
+];
+
+const sidestoriesQuickTemplates: QuickTemplate[] = [
+  {
+    label: '反派起源',
+    icon: 'ri-user-heart-line',
+    color: '#ec4899',
+    type: '人物外传',
+    prompt: '生成主要反派的起源故事，展示他从善良到堕落的转变过程',
+  },
+  {
+    label: '世界前史',
+    icon: 'ri-rewind-line',
+    color: '#8b5cf6',
+    type: '前传故事',
+    prompt: '生成世界建立之初的故事，解释当前世界格局形成的历史原因',
+  },
+  {
+    label: '隐藏真相',
+    icon: 'ri-key-2-line',
+    color: '#22c55e',
+    type: '隐藏剧情',
+    prompt: '生成隐藏在主线背后的秘密剧情，揭示不为人知的真相和阴谋',
+  },
+];
+
+const SIDESTORIES_SYSTEM_PROMPT = `你是一个专业的小说支线故事设计师。请根据用户要求生成详细的支线故事设计。
+输出格式要求：返回JSON对象，包含以下字段（每个字段为描述文本）：
+- 支线概述：支线故事的核心内容和主题（200字以上）
+- 关键转折：支线中的关键转折点和冲突（200字以上）
+- 主线关联：与主线故事的关联和影响（200字以上）
+
+示例：
+{"支线概述":"反派柳无邪原为正道天骄，因遭师妹陷害被逐出宗门，在绝境中偶得上古魔功残卷，逐步堕入魔道。他暗中建立暗影阁势力，表面依附世家，实则积蓄力量图谋复仇。其内心仍保留一丝善念，在关键时刻对主角网开一面，暗示未来可能的救赎转折。","关键转折":"第一次转折：柳无邪发现师妹陷害真相并非出于本意，背后另有主使，动摇了他的复仇信念。第二次转折：在追杀主角时意外得知主角也身负相同血脉诅咒，二人命运交织，开始从敌对转向微妙的合作。第三次转折：暗影阁内部叛变，柳无邪被迫在复仇与守护之间做出抉择，最终选择牺牲自我封印上古魔物。","主线关联":"柳无邪的暗影阁为主角提供了关键情报，帮助主角识破世家的阴谋。柳无邪封印魔物的举动直接影响了主线中天道修复的进程，为最终决战创造了条件。其身世的揭露也补全了世界观中关于血脉诅咒的设定。"}`;
+
+// ── Zod schemas for AI generation ──────────────────────────────────────
+
+const sidestorySchema = z.record(z.string());
+const chapterAssocSchema = z.array(
+  z.object({ 章节序号: z.number(), 章节标题: z.string(), 要点: z.string() })
+);
+const eventFlowSchema = z.array(
+  z
+    .object({
+      名称: z.string().optional(),
+      序号: z.union([z.string(), z.number()]).optional(),
+    })
+    .passthrough()
+);
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -297,7 +596,8 @@ const 事件详情面板: React.FC<{
   onClose: () => void;
   onSave: (updated: 事件数据) => void;
   onDelete: (id: number) => void;
-}> = ({ 事件, 当前卷, onClose, onSave, onDelete }) => {
+  projectId: number | null;
+}> = ({ 事件, 当前卷, onClose, onSave, onDelete, projectId }) => {
   const [form, setForm] = useState<事件数据>({ ...事件 });
   const [展开关联, set展开关联] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState(false);
@@ -305,7 +605,10 @@ const 事件详情面板: React.FC<{
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiTarget, setAiTarget] = useState<string | null>(null);
 
-  const { generate: aiGenerate } = useAIGenerate();
+  const { generate: aiGenerate } = useAIGenerate({
+    module: 'sidestories',
+    projectId,
+  });
 
   const 章节范围 = 当前卷 ? `${当前卷.起始章}-${当前卷.结束章}` : '1-96';
 
@@ -387,16 +690,25 @@ const 事件详情面板: React.FC<{
       ];
       const text = await aiGenerate(messages);
       if (text) {
-        setForm(prev => ({
-          ...prev,
-          [要素key]: { ...(prev as any)[要素key], 内容: text },
-        }));
+        setForm(prev => {
+          const updated = {
+            ...prev,
+            [要素key]: { ...(prev as any)[要素key], 内容: text },
+          };
+          if (projectId) {
+            saveVersion('sidestories', projectId, {
+              描述: 'AI完善要素',
+              内容: updated,
+            }).catch(() => {});
+          }
+          return updated;
+        });
         setSaved(false);
       }
       setAiGenerating(false);
       setAiTarget(null);
     },
-    [aiGenerating, form, 事件, aiGenerate]
+    [aiGenerating, form, 事件, aiGenerate, projectId]
   );
 
   const handleAI关联 = useCallback(
@@ -406,40 +718,50 @@ const 事件详情面板: React.FC<{
       setAiTarget(要素key);
       const 要素 = (form as any)[要素key] as 要素数据;
       const 要素名 = 七要素配置.find(c => c.key === 要素key)?.label ?? 要素key;
-      const prompt = `事件名称：${事件.名称}\n${要素名}内容：${要素.内容 || '无'}\n当前章节范围：第${章节范围}章\n\n请推荐与该要素关联的章节。输出JSON数组，每个元素：{"章节序号":1,"章节标题":"标题","要点":"关联要点"}`;
+      const prompt = `事件名称：${事件.名称}\n${要素名}内容：${要素.内容 || '无'}\n当前章节范围：第${章节范围}章\n\n请推荐与该要素关联的章节。请用管道格式输出，每个关联用 --- 分隔。每行格式：章节序号|数字\n章节标题|标题\n要点|描述`;
       const messages = [
         {
           role: 'system',
-          content:
-            '你是一个专业的小说创作助手。请为事件要素智能推荐关联章节。要求：输出纯JSON格式，不要包含markdown代码块标记。',
+          content: buildChapterAssocSystemPrompt(),
         },
         { role: 'user', content: prompt },
       ];
-      const text = await aiGenerate(messages);
-      if (text) {
-        const { data } =
-          parseAIJSON<
-            Array<{ 章节序号: number; 章节标题: string; 要点: string }>
-          >(text);
-        if (data && Array.isArray(data)) {
-          setForm(prev => {
-            const 要素 = { ...(prev as any)[要素key] } as 要素数据;
-            return {
-              ...prev,
-              [要素key]: {
-                ...要素,
-                章节关联: [...(要素.章节关联 || []), ...data],
-              },
-            };
-          });
-          set展开关联(prev => ({ ...prev, [要素key]: true }));
-          setSaved(false);
-        }
+      const gvResult = await generateValidated({
+        schema: chapterAssocSchema,
+        generate: async () => aiGenerate(messages),
+        parseResponse: text => parseChapterAssocResponse(text),
+        maxRetries: 3,
+      });
+      if (gvResult) {
+        const data = gvResult.data as Array<{
+          章节序号: number;
+          章节标题: string;
+          要点: string;
+        }>;
+        setForm(prev => {
+          const 要素 = { ...(prev as any)[要素key] } as 要素数据;
+          const updated = {
+            ...prev,
+            [要素key]: {
+              ...要素,
+              章节关联: [...(要素.章节关联 || []), ...data],
+            },
+          };
+          if (projectId) {
+            saveVersion('sidestories', projectId, {
+              描述: 'AI关联章节',
+              内容: updated,
+            }).catch(() => {});
+          }
+          return updated;
+        });
+        set展开关联(prev => ({ ...prev, [要素key]: true }));
+        setSaved(false);
       }
       setAiGenerating(false);
       setAiTarget(null);
     },
-    [aiGenerating, 事件, 章节范围, aiGenerate]
+    [aiGenerating, 事件, 章节范围, aiGenerate, projectId]
   );
 
   const handleAI批量关联 = useCallback(async () => {
@@ -451,12 +773,14 @@ const 事件详情面板: React.FC<{
       {
         role: 'system',
         content:
-          '你是一个专业的小说创作助手。请为事件所有要素批量推荐关联章节。要求：输出纯JSON格式，不要包含markdown代码块标记。',
+          buildChapterAssocSystemPrompt() +
+          '\n\n批量模式：输出JSON对象，key为要素名称(欲望/阻碍/行动/结果/意外/转折/结局)，value为关联数组。',
       },
       { role: 'user', content: prompt },
     ];
     const text = await aiGenerate(messages);
     if (text) {
+      // Try JSON format first for batch (more structured), then fallback
       const { data } =
         parseAIJSON<
           Record<
@@ -474,6 +798,12 @@ const 事件详情面板: React.FC<{
               (updated as any)[配置.key] = { ...要素, 章节关联: 关联 };
             }
           });
+          if (projectId) {
+            saveVersion('sidestories', projectId, {
+              描述: 'AI批量关联',
+              内容: updated,
+            }).catch(() => {});
+          }
           return updated;
         });
         const allExpanded: Record<string, boolean> = {};
@@ -486,16 +816,20 @@ const 事件详情面板: React.FC<{
     }
     setAiGenerating(false);
     setAiTarget(null);
-  }, [aiGenerating, 事件, 章节范围, aiGenerate]);
+  }, [aiGenerating, 事件, 章节范围, aiGenerate, projectId]);
 
   const handleSave = () => {
     setSaving(true);
-    setTimeout(() => {
-      onSave(form);
-      setSaving(false);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    }, 600);
+    onSave(form);
+    if (projectId) {
+      saveVersion('sidestories', projectId, {
+        描述: '保存支线',
+        内容: form,
+      }).catch(() => {});
+    }
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   };
 
   return (
@@ -978,7 +1312,59 @@ export const SideStoriesPanel: React.FC<Props> = ({
   const [显示AI进度, set显示AI进度] = useState(false);
   const [batchAiGenerating, setBatchAiGenerating] = useState(false);
 
-  const { generating: aiGenerating, generate: aiGenerate } = useAIGenerate();
+  const { generating: aiGenerating, generate: aiGenerate } = useAIGenerate({
+    module: 'sidestories',
+    projectId,
+  });
+
+  /* ─── Flat data for AI field/full generation ─── */
+  const [flatData, setFlatData] = useState<Record<string, string>>({});
+
+  const fetchSystemPrompt = useSystemPrompt(
+    'AI生成支线故事',
+    SIDESTORIES_SYSTEM_PROMPT
+  );
+
+  const buildExistingStr = useCallback(
+    (_excludeField?: string) => {
+      return Object.entries(flatData)
+        .filter(([, v]) => v)
+        .map(([k, v]) => `${k}：${v}`)
+        .join('\n');
+    },
+    [flatData]
+  );
+
+   
+  const fieldGen = useAIFieldGenerate({
+    module: 'sidestories',
+    projectId,
+    data: flatData,
+    setData: setFlatData,
+    fetchSystemPrompt,
+    buildExistingStr,
+    schema: sidestorySchema,
+  });
+
+  const fullGen = useAIFullGenerate({
+    module: 'sidestories',
+    projectId,
+    data: flatData,
+    setData: setFlatData,
+    fetchSystemPrompt,
+    parseResponse: (text: string) => {
+      const result = parseSidestoryResponse(text);
+      if (!result) return null;
+      const filtered: Record<string, string> = {};
+      for (const [k, v] of Object.entries(result)) {
+        if (typeof v === 'string') filtered[k] = v;
+      }
+      return filtered;
+    },
+    schema: sidestorySchema,
+    buildUserMessage: (type, desc) =>
+      `请生成${type}类型的支线故事设计。\n\n${desc ? `用户补充要求：${desc}\n\n` : ''}已有设定：\n${buildExistingStr() || '无'}\n\n请按管道格式输出，每行一个字段：支线概述|<内容>\n关键转折|<内容>\n主线关联|<内容>`,
+  });
 
   // Data (use API when projectId, otherwise demo)
   const 卷列表Url = projectId ? `/api/volume/project/${projectId}/all` : null;
@@ -1089,20 +1475,24 @@ export const SideStoriesPanel: React.FC<Props> = ({
     set显示AI确认(false);
     set显示AI进度(true);
     for (const 卷 of 卷列表) {
-      const prompt = `为第${卷.序号}幕「${卷.标题}」(章节范围：${卷.章节范围})生成2个主线事件流。每个事件包含七要素：欲望、阻碍、行动、结果、意外、转折、结局。输出JSON数组，每个元素：{"名称":"事件名","序号":1,"卷id":${卷.id},"欲望":{"内容":"描述","章节关联":[]},"阻碍":{"内容":"描述","章节关联":[]},"行动":{"内容":"描述","章节关联":[]},"结果":{"内容":"描述","章节关联":[]},"意外":{"内容":"描述","章节关联":[]},"转折":{"内容":"描述","章节关联":[]},"结局":{"内容":"描述","章节关联":[]}}`;
+      const prompt = `为第${卷.序号}幕「${卷.标题}」(章节范围：${卷.章节范围})生成2个主线事件流。每个事件包含七要素：欲望、阻碍、行动、结果、意外、转折、结局。请用管道格式输出，事件之间用 === 分隔。每行格式：字段名|内容。例如：\n名称|事件名\n序号|1\n卷id|${卷.id}\n欲望|描述\n阻碍|描述\n行动|描述\n结果|描述\n意外|描述\n转折|描述\n结局|描述\n===\n名称|事件名2\n...`;
       const messages = [
         {
           role: 'system',
-          content:
-            '你是一个专业的小说创作助手。请根据给定的信息生成支线故事事件流。要求：输出纯JSON格式，不要包含markdown代码块标记。',
+          content: buildEventFlowSystemPrompt(),
         },
         { role: 'user', content: prompt },
       ];
-      const text = await aiGenerate(messages);
-      if (!text) continue;
-      const { data } = parseAIJSON<Array<Partial<事件数据>>>(text);
-      if (data && Array.isArray(data)) {
-        const 新事件 = data.map((evt, i) => ({
+      const gvResult = await generateValidated({
+        schema: eventFlowSchema,
+        generate: async () => aiGenerate(messages),
+        parseResponse: text => parseEventFlowResponse(text),
+        maxRetries: 3,
+      });
+      if (!gvResult) continue;
+      const parsed = gvResult.data as any[];
+      if (parsed && Array.isArray(parsed)) {
+        const 新事件 = parsed.map((evt, i) => ({
           id: Date.now() + i + Math.random(),
           序号: evt.序号 || i + 1,
           名称: evt.名称 || `新事件${i + 1}`,
@@ -1121,7 +1511,13 @@ export const SideStoriesPanel: React.FC<Props> = ({
       }
     }
     set显示AI进度(false);
-  }, [aiGenerate, 卷列表, set事件列表]);
+    if (projectId) {
+      saveVersion('sidestories', projectId, {
+        描述: 'AI生成事件流',
+        内容: 事件列表,
+      }).catch(() => {});
+    }
+  }, [aiGenerate, 卷列表, set事件列表, projectId, 事件列表]);
 
   const handle一键关联所有事件 = useCallback(async () => {
     if (batchAiGenerating) return;
@@ -1136,48 +1532,73 @@ export const SideStoriesPanel: React.FC<Props> = ({
       {
         role: 'system',
         content:
-          '你是一个专业的小说创作助手。请为事件要素智能关联章节。要求：输出纯JSON格式，不要包含markdown代码块标记。',
+          buildChapterAssocSystemPrompt() +
+          '\n\n批量关联模式：输出JSON数组，每个元素包含事件名称、要素key和章节关联数组。',
       },
       { role: 'user', content: prompt },
     ];
-    const text = await aiGenerate(messages);
-    if (text) {
-      const { data } = parseAIJSON<
-        Array<{
-          事件名称: string;
-          要素key: string;
-          章节关联: Array<{
-            章节序号: number;
-            章节标题: string;
-            要点: string;
-          }>;
-        }>
-      >(text);
-      if (data && Array.isArray(data)) {
-        set事件列表(prev =>
-          (prev || []).map(事件 => {
-            const updated = { ...事件 };
-            for (const assoc of data) {
-              if (
-                assoc.事件名称 === 事件.名称 &&
-                七要素配置.some(c => c.key === assoc.要素key)
-              ) {
-                const 要素 = { ...(updated as any)[assoc.要素key] } as 要素数据;
-                if (要素.章节关联.length === 0) {
-                  (updated as any)[assoc.要素key] = {
-                    ...要素,
-                    章节关联: assoc.章节关联,
-                  };
-                }
+    const gvResult = await generateValidated({
+      schema: z.array(
+        z.object({
+          事件名称: z.string(),
+          要素key: z.string(),
+          章节关联: z.array(
+            z.object({
+              章节序号: z.number(),
+              章节标题: z.string(),
+              要点: z.string(),
+            })
+          ),
+        })
+      ),
+      generate: async () => aiGenerate(messages),
+      parseResponse: text => {
+        const { data } = parseAIJSON<
+          Array<{
+            事件名称: string;
+            要素key: string;
+            章节关联: Array<{
+              章节序号: number;
+              章节标题: string;
+              要点: string;
+            }>;
+          }>
+        >(text);
+        return data ?? null;
+      },
+      maxRetries: 3,
+    });
+    if (gvResult) {
+      const data = gvResult.data;
+      set事件列表(prev =>
+        (prev || []).map(事件 => {
+          const updated = { ...事件 };
+          for (const assoc of data) {
+            if (
+              assoc.事件名称 === 事件.名称 &&
+              七要素配置.some(c => c.key === assoc.要素key)
+            ) {
+              const 要素 = { ...(updated as any)[assoc.要素key] } as 要素数据;
+              if (要素.章节关联.length === 0) {
+                (updated as any)[assoc.要素key] = {
+                  ...要素,
+                  章节关联: assoc.章节关联,
+                };
               }
             }
-            return updated;
-          })
-        );
-      }
+          }
+          return updated;
+        })
+      );
     }
     setBatchAiGenerating(false);
-  }, [batchAiGenerating, 事件列表, aiGenerate, set事件列表]);
+    if (projectId) {
+      saveVersion('sidestories', projectId, {
+        描述: 'AI一键关联所有事件',
+        内容: 事件列表,
+      }).catch(() => {});
+    }
+  }, [batchAiGenerating, 事件列表, aiGenerate, set事件列表, projectId]);
 
   return createPortal(
     <>
@@ -1207,6 +1628,14 @@ export const SideStoriesPanel: React.FC<Props> = ({
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="px-2.5 py-1 text-xs bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                  title="AI完整生成"
+                  onClick={fullGen.open}
+                >
+                  <i className="ri-sparkles-line" /> AI完整生成
+                </button>
                 <button
                   type="button"
                   className="w-8 h-8 flex items-center justify-center hover:bg-purple-500/20 rounded-lg transition-colors cursor-pointer text-[var(--text-secondary)]"
@@ -1508,6 +1937,7 @@ export const SideStoriesPanel: React.FC<Props> = ({
             onClose={() => set选中事件(null)}
             onSave={handleSave事件}
             onDelete={handleDelete事件}
+            projectId={projectId}
           />,
           document.body
         )}
@@ -1532,6 +1962,24 @@ export const SideStoriesPanel: React.FC<Props> = ({
           />,
           document.body
         )}
+
+      {/* AI Full Generation Dialog */}
+      <AIGenerationDialog
+        title="AI生成支线故事"
+        subtitle="选择类型或描述你的构想，AI将为你构建完整的支线故事设计"
+        phase={fullGen.phase}
+        genType={fullGen.genType}
+        setGenType={fullGen.setGenType}
+        genDesc={fullGen.genDesc}
+        setGenDesc={fullGen.setGenDesc}
+        streamText={fullGen.streamText}
+        parsed={fullGen.parsed}
+        typeOptions={sidestoriesTypeOptions}
+        quickTemplates={sidestoriesQuickTemplates}
+        onStart={fullGen.start}
+        onAdopt={fullGen.adopt}
+        onClose={fullGen.close}
+      />
     </>,
     document.body
   );

@@ -6,6 +6,8 @@ import { logger } from 'hono/logger';
 
 import { createAskRouter } from './routes/ask';
 import { createChatRouter } from './routes/chat';
+import { createGenerateRouter } from './routes/generate';
+import { createProxyRouter } from './routes/proxy';
 import { createSessionRouter } from './routes/sessions';
 import { StoryQueryEngine } from './services/query-engine';
 import { SessionStore } from './services/session-store';
@@ -31,6 +33,8 @@ async function main() {
   app.route('/api/ai/sessions', createSessionRouter(sessionStore));
   app.route('/api/ai/chat', createChatRouter(sessionStore, queryEngine));
   app.route('/api/ai/ask', createAskRouter(queryEngine));
+  app.route('/api/ai/generate', createGenerateRouter());
+  app.route('/api/proxy', createProxyRouter());
 
   app.get('/health', c => c.json({ status: 'ok' }));
 

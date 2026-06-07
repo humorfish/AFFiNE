@@ -14,9 +14,7 @@ export function createAskRouter(queryEngine: StoryQueryEngine): Hono {
       scenario?: Scenario;
     };
 
-    const messages = body.messages?.length
-      ? body.messages
-      : null;
+    const messages = body.messages?.length ? body.messages : null;
 
     if (!messages) {
       return c.json({ error: 'messages is required' }, 400);
@@ -29,9 +27,15 @@ export function createAskRouter(queryEngine: StoryQueryEngine): Hono {
       const lastUserIdx = messages.findLastIndex(m => m.role === 'user');
       if (lastUserIdx >= 0) {
         const originalInput = messages[lastUserIdx].content;
-        const enhancedInput = scenarioConfig.buildUserMessage(originalInput, body.context);
+        const enhancedInput = scenarioConfig.buildUserMessage(
+          originalInput,
+          body.context
+        );
         finalMessages = [...messages];
-        finalMessages[lastUserIdx] = { ...finalMessages[lastUserIdx], content: enhancedInput };
+        finalMessages[lastUserIdx] = {
+          ...finalMessages[lastUserIdx],
+          content: enhancedInput,
+        };
       }
     }
 
@@ -43,7 +47,7 @@ export function createAskRouter(queryEngine: StoryQueryEngine): Hono {
           body.context,
           c.req.raw.signal,
           false,
-          body.scenario ?? 'assistant',
+          body.scenario ?? 'assistant'
         );
 
         for await (const event of chatStream) {
@@ -58,7 +62,7 @@ export function createAskRouter(queryEngine: StoryQueryEngine): Hono {
 
         // If scenario has a parser, send parsed result
         if (scenarioConfig) {
-          const parsed = scenarioConfig.parse(fullText);
+          const parsed = scenarioConfig.parse(fullText, body.context);
           await stream.writeSSE({
             event: 'parsed',
             data: JSON.stringify(parsed),
