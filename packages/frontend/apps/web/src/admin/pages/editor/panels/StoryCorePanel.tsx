@@ -1,12 +1,14 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+  useEffect,
+} from 'react';
 import { createPortal } from 'react-dom';
-import {
-  generateLLM,
-  generateValidated,
-  useSystemPrompt,
-} from './panel-shared';
+import { generateLLM, generateValidated } from './panel-shared';
 import { z } from 'zod';
-import { saveVersion } from '../useWorldApi';
+import { API_BASE, getAuthHeaders } from '../useWorldApi';
 
 interface Props {
   projectId: number | null;
@@ -172,6 +174,33 @@ export const StoryCorePanel: React.FC<Props> = ({
   leftOffset,
 }) => {
   const [数据, set数据] = useState<Record<string, string>>({});
+
+  // ── Load data from server (源码 lines 41585-41610) ──
+  useEffect(() => {
+    if (!projectId) return;
+    fetch(`${API_BASE}/api/story-cores/project/${projectId}`, {
+      headers: getAuthHeaders(),
+    })
+      .then(r => r.json())
+      .then(res => {
+        if (res.success && res.data) {
+          // Extract exact same fields as Vue (源码 lines 41592-41601)
+          const fields: Record<string, string> = {};
+          for (const key of [
+            '核心主题',
+            '核心冲突',
+            '重大赌注',
+            '预期悬念',
+            '结局方向',
+            '结局走向',
+          ]) {
+            fields[key] = res.data[key] || '';
+          }
+          set数据(fields);
+        }
+      })
+      .catch(() => {});
+  }, [projectId]);
   const [折叠, set折叠] = useState<Record<string, boolean>>({
     核心主题: true,
     核心冲突: true,
@@ -180,7 +209,7 @@ export const StoryCorePanel: React.FC<Props> = ({
     结局方向: true,
     结局走向: true,
   });
-  /* Per-section font size (源码 line 151790: each field starts at 14, range 12-24) */
+  /* Per-section font size (源码 line 151851: each field starts at 14, range 12-20) */
   const [字体大小, set字体大小] = useState<Record<string, number>>(() => {
     const m: Record<string, number> = {};
     核心字段.forEach(f => {
@@ -191,7 +220,7 @@ export const StoryCorePanel: React.FC<Props> = ({
   const adjustFont = useCallback((field: string, delta: number) => {
     set字体大小(prev => ({
       ...prev,
-      [field]: Math.max(12, Math.min(24, (prev[field] || 14) + delta)),
+      [field]: Math.max(12, Math.min(20, (prev[field] || 14) + delta)),
     }));
   }, []);
 
@@ -209,22 +238,39 @@ export const StoryCorePanel: React.FC<Props> = ({
   );
   const [genError, setGenError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
-  const fetchSystemPrompt = useSystemPrompt(
-    'AI生成故事核心',
-    buildStoryCoreSystemPrompt()
-  );
 
   const handleSave = useCallback(async () => {
     if (!projectId) return;
     setSaving(true);
     setSaved(false);
     try {
-      await saveVersion('storycore', projectId, {
-        描述: '保存故事核心',
-        内容: 数据,
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      // Send exact 6 content fields (源码 lines 41617-41624)
+      const contentFields: Record<string, string> = {};
+      for (const key of [
+        '核心主题',
+        '核心冲突',
+        '重大赌注',
+        '预期悬念',
+        '结局方向',
+        '结局走向',
+      ]) {
+        contentFields[key] = 数据[key] || '';
+      }
+      const res = await fetch(
+        `${API_BASE}/api/story-cores/project/${projectId}`,
+        {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(contentFields),
+        }
+      );
+      const result = await res.json();
+      if (result.success) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } else {
+        alert(result.message || '保存失败');
+      }
     } catch {
       alert('保存失败');
     } finally {
@@ -251,8 +297,21 @@ export const StoryCorePanel: React.FC<Props> = ({
     abortRef.current = ac;
 
     try {
-      const apiPrompt = await fetchSystemPrompt();
-      const systemPrompt = apiPrompt || buildStoryCoreSystemPrompt();
+      // Fetch worldview context (源码 lines 41779-41786)
+      let worldview: Record<string, string> | undefined;
+      if (projectId) {
+        try {
+          const ctxRes = await fetch(
+            `${API_BASE}/api/story-cores/project/${projectId}/context`,
+            { headers: getAuthHeaders(), signal: ac.signal }
+          );
+          const ctxResult = await ctxRes.json();
+          if (ctxResult.success && ctxResult.data?.世界观信息) {
+            worldview = ctxResult.data.世界观信息;
+          }
+        } catch {}
+      }
+      const systemPrompt = buildStoryCoreSystemPrompt(worldview);
       const messages = [
         { role: 'system' as const, content: systemPrompt },
         {
@@ -290,19 +349,55 @@ export const StoryCorePanel: React.FC<Props> = ({
     } finally {
       setGenerating(false);
     }
-  }, [aiPrompt, fetchSystemPrompt]);
+  }, [aiPrompt, projectId]);
 
-  /* AI生成: adopt result (源码 function P, line 151840) */
-  const adoptResult = useCallback(() => {
+  /* AI生成: adopt result (源码 function N, lines 41862-41888) */
+  const adoptResult = useCallback(async () => {
     if (!genResult) return;
-    set数据(prev => ({ ...prev, ...genResult }));
+    // Merge genResult into data (源码 lines 41867-41872)
+    const merged = { ...数据 };
+    for (const key of [
+      '核心主题',
+      '核心冲突',
+      '重大赌注',
+      '预期悬念',
+      '结局方向',
+      '结局走向',
+    ]) {
+      merged[key] = genResult[key] || 数据[key] || '';
+    }
+    set数据(merged);
     setShowAIDialog(false);
     setGenResult(null);
     if (projectId) {
-      saveVersion('storycore', projectId, {
-        描述: 'AI生成故事核心',
-        内容: { ...数据, ...genResult },
-      }).catch(() => {});
+      // Save with exact 6 fields
+      const contentFields: Record<string, string> = {};
+      for (const key of [
+        '核心主题',
+        '核心冲突',
+        '重大赌注',
+        '预期悬念',
+        '结局方向',
+        '结局走向',
+      ]) {
+        contentFields[key] = merged[key] || '';
+      }
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/story-cores/project/${projectId}`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(contentFields),
+          }
+        );
+        const result = await res.json();
+        if (!result.success) {
+          alert(result.message || '采用结果保存失败');
+        }
+      } catch {
+        alert('采用结果保存失败');
+      }
     }
   }, [genResult, 数据, projectId]);
 
@@ -347,11 +442,11 @@ export const StoryCorePanel: React.FC<Props> = ({
           className="h-full bg-[var(--bg-darker)] border-r border-[var(--border)] flex flex-col shadow-2xl"
           style={{ width }}
         >
-          {/* Header (源码 lines 151960-152035) */}
+          {/* Header (源码 lines 151950-152104) */}
           <div className="shrink-0 px-4 py-3 border-b border-[var(--border)] bg-[var(--bg-dark)]">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500/30 to-amber-600/10 border border-amber-500/20">
+                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-amber-500/20">
                   <i className="text-lg text-amber-400 ri-focus-3-line" />
                 </div>
                 <div>
@@ -362,6 +457,12 @@ export const StoryCorePanel: React.FC<Props> = ({
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {saved && (
+                  <span className="text-xs text-green-400 flex items-center gap-1">
+                    <i className="ri-check-line" />
+                    已保存
+                  </span>
+                )}
                 <span className="text-xs text-[var(--text-secondary)] px-2 py-1 bg-[var(--bg-card)] rounded">
                   {完成字段}/{核心字段.length} 字段
                 </span>
@@ -372,15 +473,23 @@ export const StoryCorePanel: React.FC<Props> = ({
                   disabled={generating}
                 >
                   <i
-                    className={`ri-${generating ? 'loader-4-line animate-spin' : 'magic-line'}`}
+                    className={
+                      generating
+                        ? 'ri-loader-4-line animate-spin'
+                        : 'ri-magic-line'
+                    }
                   />
                 </button>
                 <button
-                  className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-lg text-sm transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded-lg text-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
                   onClick={handleSave}
                   disabled={saving}
                 >
-                  <i className="ri-save-line mr-1" />
+                  <i
+                    className={
+                      saving ? 'ri-loader-4-line animate-spin' : 'ri-save-line'
+                    }
+                  />
                   {saved ? '已保存' : saving ? '保存中...' : '保存'}
                 </button>
                 <button
@@ -394,58 +503,68 @@ export const StoryCorePanel: React.FC<Props> = ({
           </div>
 
           {/* Section cards (源码 lines 152036-153920) */}
-          <div className="flex-1 p-4 space-y-4 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {核心字段.map(f => {
               const isCollapsed = 折叠[f.key] === false;
               return (
-                <div key={f.key} className="bg-[var(--bg-dark)] rounded-xl p-4">
+                <div
+                  key={f.key}
+                  className="bg-[var(--bg-card)] rounded-xl overflow-hidden border border-[var(--border)]"
+                >
                   <div
-                    className="flex items-center justify-between cursor-pointer"
+                    className="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-[var(--bg-dark)] transition-colors"
                     onClick={() =>
                       set折叠(prev => ({ ...prev, [f.key]: !prev[f.key] }))
                     }
                   >
-                    <h3 className="flex items-center gap-2 text-sm font-semibold">
-                      <i className={`${f.icon} ${f.colorClass}`} /> {f.key}{' '}
-                      <span className="text-xs text-[var(--text-muted)] font-normal">
-                        {f.desc}
-                      </span>
-                    </h3>
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-8 h-8 rounded-lg ${f.bgClass} flex items-center justify-center`}
+                      >
+                        <i className={`${f.icon} ${f.colorClass}`} />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-medium">{f.key}</h3>
+                        <p className="text-xs text-[var(--text-secondary)]">
+                          {f.desc}
+                        </p>
+                      </div>
+                    </div>
                     <i
-                      className={`ri-arrow-${isCollapsed ? 'down' : 'up'}-s-line text-[var(--text-muted)]`}
+                      className={`ri-arrow-${isCollapsed ? 'down' : 'up'}-s-line text-lg text-[var(--text-secondary)]`}
                     />
                   </div>
                   {!isCollapsed && (
-                    <div className="mt-3 relative">
-                      <textarea
-                        className="w-full bg-[var(--bg-card)] border border-[var(--border)] rounded px-3 py-2 text-sm overflow-y-auto resize-y focus:border-[var(--primary)] transition-colors pr-16"
-                        style={{
-                          minHeight: '120px',
-                          maxHeight: '300px',
-                          fontSize: `${字体大小[f.key] || 14}px`,
-                        }}
-                        placeholder={f.placeholder}
-                        value={数据[f.key] || ''}
-                        onChange={e =>
-                          set数据(prev => ({
-                            ...prev,
-                            [f.key]: e.target.value,
-                          }))
-                        }
-                      />
-                      <div className="absolute top-2 right-2 flex gap-0.5">
-                        <button
-                          className="w-5 h-5 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--border)] transition-colors"
-                          onClick={() => adjustFont(f.key, -1)}
-                        >
-                          <i className="text-xs ri-zoom-out-line" />
-                        </button>
-                        <button
-                          className="w-5 h-5 rounded flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--border)] transition-colors"
-                          onClick={() => adjustFont(f.key, 1)}
-                        >
-                          <i className="text-xs ri-zoom-in-line" />
-                        </button>
+                    <div className="px-4 pb-4">
+                      <div className="relative">
+                        <textarea
+                          className="w-full h-32 p-3 bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg text-sm resize-y focus:outline-none focus:border-amber-500/50 placeholder:text-[var(--text-secondary)]/50"
+                          style={{
+                            fontSize: `${字体大小[f.key] || 14}px`,
+                          }}
+                          placeholder={f.placeholder}
+                          value={数据[f.key] || ''}
+                          onChange={e =>
+                            set数据(prev => ({
+                              ...prev,
+                              [f.key]: e.target.value,
+                            }))
+                          }
+                        />
+                        <div className="absolute top-2 right-2 flex gap-1">
+                          <button
+                            className="p-1 hover:bg-[var(--bg-card)] rounded text-xs"
+                            onClick={() => adjustFont(f.key, -1)}
+                          >
+                            <i className="ri-subtract-line" />
+                          </button>
+                          <button
+                            className="p-1 hover:bg-[var(--bg-card)] rounded text-xs"
+                            onClick={() => adjustFont(f.key, 1)}
+                          >
+                            <i className="ri-add-line" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -454,24 +573,27 @@ export const StoryCorePanel: React.FC<Props> = ({
             })}
           </div>
 
-          {/* Footer (源码 lines 154063-154080) */}
-          <div className="shrink-0 px-5 py-3 border-t border-[var(--border)] bg-[var(--bg-darker)] flex justify-end">
-            <span className="text-xs text-[var(--text-secondary)]">
-              总计 {总字数} 字
-            </span>
+          {/* Footer (源码 lines 153275-153300) */}
+          <div className="shrink-0 px-4 py-2 border-t border-[var(--border)] bg-[var(--bg-dark)]">
+            <div className="flex items-center justify-between text-xs text-[var(--text-secondary)]">
+              <span>总计 {总字数} 字</span>
+              <span>
+                完成度 {Math.round((完成字段 / 核心字段.length) * 100)}%
+              </span>
+            </div>
           </div>
         </div>
 
         {/* Resize handle */}
         <div
-          className="relative z-10 w-2 bg-transparent cursor-col-resize hover:bg-amber-500/50 active:bg-amber-500 shrink-0"
+          className="w-2 cursor-col-resize hover:bg-amber-500/50 active:bg-amber-500 transition-colors shrink-0 relative z-10 bg-transparent"
           title="拖拽调整宽度"
           onMouseDown={handleMouseDown}
         />
         {/* Backdrop */}
         <div
-          className="fixed top-0 bottom-0 right-0 bg-black/0 hover:bg-black/5"
-          style={{ left: (leftOffset || 0) + width + 2 }}
+          className="fixed top-0 bottom-0 right-0 bg-black/0 hover:bg-black/5 transition-colors"
+          style={{ left: (leftOffset || 0) + width + 4 }}
           onClick={onClose}
         />
       </div>
@@ -479,108 +601,153 @@ export const StoryCorePanel: React.FC<Props> = ({
       {/* AI Generation Dialog (源码 lines 153550-153920) */}
       {showAIDialog &&
         createPortal(
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-[var(--bg-darker)] border border-[var(--border)] rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl">
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-[var(--bg-card)] rounded-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
               {/* Dialog header */}
-              <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between">
+              <div className="flex items-center justify-between p-4 border-b border-[var(--border)]">
                 <div className="flex items-center gap-2">
                   <i className="ri-magic-line text-amber-400" />
                   <h3 className="font-semibold">AI生成故事核心</h3>
                 </div>
                 <button
-                  className="p-1.5 hover:bg-[var(--bg-dark)] rounded-lg"
+                  type="button"
+                  className="p-1 hover:bg-[var(--border)] rounded transition-colors cursor-pointer"
                   onClick={cancelGeneration}
+                  disabled={generating}
                 >
                   <i className="ri-close-line" />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              <div className="p-4 overflow-y-auto flex-1 space-y-4">
                 {/* Prompt textarea */}
                 <div>
-                  <label className="text-sm text-[var(--text-secondary)] block mb-1.5">
+                  <label className="text-sm text-[var(--text-secondary)] mb-2 block">
                     生成提示词（可选）
                   </label>
                   <textarea
-                    className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm min-h-[80px] resize-y focus:border-amber-500/50"
-                    placeholder="描述你想要的故事核心，如：一个修仙世界的逆袭故事，主角从底层崛起..."
+                    className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm min-h-[80px] resize-y focus:border-amber-500 transition-colors"
+                    placeholder="描述你想要的故事核心，如：一个关于复仇与救赎的故事，主角需要面对过去的阴影..."
                     value={aiPrompt}
                     onChange={e => setAiPrompt(e.target.value)}
                     disabled={generating}
                   />
                 </div>
 
-                <p className="text-xs text-[var(--text-secondary)]">
+                <p className="text-xs text-[var(--text-secondary)] mt-2">
+                  <i className="ri-information-line mr-1" />
                   AI会根据当前世界观信息生成故事核心，包括核心主题、核心冲突、重大赌注、预期悬念、结局方向和结局走向
                 </p>
 
-                {/* Streaming / Error */}
-                {generating && streamText && (
-                  <div className="bg-[var(--bg-dark)] rounded-xl p-4">
-                    <label className="text-sm text-[var(--text-secondary)] block mb-1">
+                {/* Streaming (源码 lines 153768-153788) */}
+                {streamText && generating && (
+                  <div>
+                    <label className="text-xs text-[var(--text-secondary)] mb-1 block">
                       生成预览
                     </label>
-                    <pre className="text-xs whitespace-pre-wrap max-h-[200px] overflow-y-auto text-[var(--text-primary)]">
-                      {streamText}
-                    </pre>
+                    <div className="bg-[var(--bg-dark)] rounded-lg p-3 text-xs max-h-40 overflow-y-auto whitespace-pre-wrap font-mono">
+                      {streamText.slice(-500)}
+                    </div>
                   </div>
                 )}
-                {genError && <p className="text-sm text-red-400">{genError}</p>}
+                {genError && (
+                  <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+                    <div className="flex items-start gap-2">
+                      <i className="ri-error-warning-line mt-0.5 shrink-0" />
+                      <div className="flex-1">
+                        <p className="font-medium">生成失败</p>
+                        <p className="mt-1 text-xs text-red-300/80">
+                          {genError}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-                {/* Result preview (源码 lines 153800-153920) */}
-                {genResult && (
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-semibold">生成结果预览</h4>
-                    {核心字段.map(f =>
-                      genResult[f.key] ? (
-                        <div
-                          key={f.key}
-                          className="bg-[var(--bg-dark)] rounded-xl p-3"
-                        >
-                          <label className="text-xs text-[var(--text-secondary)] flex items-center gap-1 mb-1">
-                            <i className={`${f.icon} ${f.colorClass}`} />{' '}
-                            {f.key}
-                          </label>
-                          <p className="text-sm whitespace-pre-wrap">
-                            {genResult[f.key]}
-                          </p>
-                        </div>
-                      ) : null
-                    )}
+                {/* Result preview (源码 lines 153532-153766) */}
+                {genResult && !generating && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <i className="ri-eye-line text-amber-400" />
+                        生成结果预览
+                      </h4>
+                    </div>
+                    <div className="bg-[var(--bg-dark)] rounded-lg p-3 space-y-3 max-h-60 overflow-y-auto">
+                      {核心字段.map(f =>
+                        genResult[f.key] ? (
+                          <div key={f.key} className="text-sm">
+                            <span className={`${f.colorClass} font-medium`}>
+                              {f.key}：
+                            </span>
+                            <span className="text-[var(--text-secondary)]">
+                              {genResult[f.key].substring(0, 100)}
+                              {genResult[f.key].length > 100 ? '...' : ''}
+                            </span>
+                          </div>
+                        ) : null
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Dialog footer */}
-              <div className="px-5 py-3 border-t border-[var(--border)] flex justify-end gap-2">
-                {genResult ? (
-                  <>
+              {/* Dialog footer (源码 lines 153790-153938) */}
+              <div className="p-4 border-t border-[var(--border)]">
+                {genResult && !generating ? (
+                  <div className="flex gap-2">
                     <button
-                      className="px-4 py-2 bg-[var(--bg-dark)] hover:bg-[var(--border)] rounded-lg text-sm"
+                      type="button"
+                      className="flex-1 btn-primary py-2 rounded-lg text-sm flex items-center justify-center gap-1 cursor-pointer"
+                      onClick={adoptResult}
+                      disabled={saving}
+                    >
+                      <i
+                        className={
+                          saving
+                            ? 'ri-loader-4-line animate-spin'
+                            : 'ri-check-line'
+                        }
+                      />
+                      {saving ? '保存中...' : '采用结果'}
+                    </button>
+                    <button
+                      type="button"
+                      className="flex-1 px-4 py-2 bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 rounded-lg text-sm flex items-center justify-center gap-1 transition-colors cursor-pointer"
                       onClick={() => {
                         setGenResult(null);
                         setStreamText('');
                       }}
+                      disabled={generating}
                     >
-                      重新生成
+                      <i className="ri-refresh-line" /> 重新生成
                     </button>
                     <button
-                      className="px-4 py-2 btn-primary rounded-lg text-sm flex items-center gap-1"
-                      onClick={adoptResult}
+                      type="button"
+                      className="flex-1 px-4 py-2 bg-[var(--bg-dark)] hover:bg-[var(--border)] rounded-lg text-sm flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      onClick={() => {
+                        setGenResult(null);
+                        setStreamText('');
+                        setShowAIDialog(false);
+                      }}
+                      disabled={saving}
                     >
-                      <i className="ri-check-line" /> 采用结果
+                      <i className="ri-delete-bin-line" /> 丢弃
                     </button>
-                  </>
+                  </div>
                 ) : (
-                  <>
+                  <div className="flex gap-2">
                     <button
-                      className="px-4 py-2 bg-[var(--bg-dark)] hover:bg-[var(--border)] rounded-lg text-sm"
+                      type="button"
+                      className="flex-1 px-4 py-2 bg-[var(--bg-dark)] hover:bg-[var(--border)] rounded-lg text-sm transition-colors cursor-pointer"
                       onClick={cancelGeneration}
+                      disabled={generating}
                     >
-                      {generating ? '取消生成' : '取消'}
+                      取消
                     </button>
                     <button
-                      className="px-4 py-2 btn-primary rounded-lg text-sm flex items-center gap-1 disabled:opacity-50"
+                      type="button"
+                      className="flex-1 btn-primary py-2 rounded-lg text-sm flex items-center justify-center gap-1 cursor-pointer"
                       onClick={startGeneration}
                       disabled={generating}
                     >
@@ -589,7 +756,7 @@ export const StoryCorePanel: React.FC<Props> = ({
                       />
                       {generating ? '生成中...' : '开始生成'}
                     </button>
-                  </>
+                  </div>
                 )}
               </div>
             </div>

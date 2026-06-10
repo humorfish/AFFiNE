@@ -1,18 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { z } from 'zod';
-import {
-  generateLLM,
-  parseAIJSON,
-  useSystemPrompt,
-  generateValidated,
-} from './panel-shared';
-import {
-  saveVersion,
-  saveGeneration,
-  saveData,
-  API_BASE,
-  getAuthHeaders,
-} from '../useWorldApi';
+import { generateLLM, parseAIJSON, generateValidated } from './panel-shared';
+import { API_BASE, getAuthHeaders } from '../useWorldApi';
 
 // ── Source-derived data ────────────────────────────────────────
 
@@ -38,25 +27,19 @@ const 关系类型选项 = [
 /** Build system prompt matching source code (lines 38440-38456) — JSON array output */
 function buildCharacterRelationsSystemPrompt(
   角色列表: string,
-  已有关系: string | null
+  已有关系: string
 ): string {
-  return [
-    '你是一位专业的小说角色关系设计师。请根据用户的要求生成角色关系。',
-    '',
-    `当前角色列表：`,
-    角色列表,
-    '',
-    已有关系 ? `已有关系：\n${已有关系}` : '暂无已有关系',
-    '',
-    '请以JSON数组格式返回结果：',
-    '[{"源角色":"角色姓名","目标角色":"角色姓名","关系类型":"类型","关系描述":"描述","颜色":"#hex颜色"}]',
-    '',
-    '示例：',
-    '[{"源角色":"叶凡","目标角色":"姬紫月","关系类型":"追求","关系描述":"叶凡对姬紫月一见倾心，誓要护她周全","颜色":"#ff69b4"},',
-    '{"源角色":"叶凡","目标角色":"庞博","关系类型":"朋友","关系描述":"同门挚友，生死与共的兄弟","颜色":"#4169e1"}]',
-    '',
-    '要求：只输出JSON数组，关系类型准确，颜色根据关系性质选择（友好绿/蓝，敌对红/橙，暗昧粉/紫）。',
-  ].join('\n');
+  return `你是一位专业的小说角色关系设计师。请根据用户的要求生成角色关系。
+
+当前角色列表：
+${角色列表}
+
+${已有关系 ? `已有关系：\n${已有关系}` : '暂无已有关系'}
+
+请以JSON数组格式返回结果：
+[{"源角色":"角色姓名","目标角色":"角色姓名","关系类型":"类型","关系描述":"描述","颜色":"#hex颜色"}]
+
+要求：只输出JSON数组，关系类型准确，颜色根据关系性质选择（友好绿/蓝，敌对红/橙，暗昧粉/紫）。`;
 }
 
 /** Parse the AI response — JSON array only (source uses JSON, not pipe) */
@@ -73,7 +56,7 @@ const CharacterRelationSchema = z.object({
   目标角色: z.string().min(1),
   关系类型: z.string(),
   关系描述: z.string(),
-  变化说明: z.string().optional().default(''),
+  颜色: z.string().optional().default(''),
 });
 
 // ── Interfaces ─────────────────────────────────────────────────
@@ -84,7 +67,7 @@ interface 关系数据 {
   目标角色: string;
   关系类型: string;
   关系描述: string;
-  变化说明: string;
+  颜色: string;
 }
 
 interface Props {
@@ -101,7 +84,7 @@ const empty关系 = (): 关系数据 => ({
   目标角色: '',
   关系类型: '朋友',
   关系描述: '',
-  变化说明: '',
+  颜色: '',
 });
 
 // ── Main Component ─────────────────────────────────────────────
@@ -124,22 +107,47 @@ export const CharacterRelationsPanel: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [showAIDialog, setShowAIDialog] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const fetchSystemPrompt = useSystemPrompt('AI生成角色关系', '');
 
   // ── Data fetching ──
-  useEffect(() => {
+  const fetchRelations = useCallback(async () => {
     if (!projectId) return;
     setLoading(true);
-    fetch(`${API_BASE}/api/character-relations/project/${projectId}`, {
-      headers: getAuthHeaders(),
-    })
-      .then(res => res.json())
-      .then(result => {
-        if (result.success && Array.isArray(result.data))
-          set关系列表(result.data);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/characters/project/${projectId}/relations`,
+        {
+          headers: getAuthHeaders(),
+        }
+      );
+      const result = await res.json();
+      if (result.success && Array.isArray(result.data))
+        set关系列表(result.data);
+    } catch {
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchRelations();
+  }, [fetchRelations]);
+
+  // ── Fetch character context for AI ──
+  const fetchCharacterContext = useCallback(async () => {
+    if (!projectId) return [];
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/characters/project/${projectId}/context`,
+        {
+          headers: getAuthHeaders(),
+        }
+      );
+      const result = await res.json();
+      if (result.success && Array.isArray(result.data)) {
+        return result.data;
+      }
+    } catch {}
+    return [];
   }, [projectId]);
 
   // ── CRUD ──
@@ -150,11 +158,36 @@ export const CharacterRelationsPanel: React.FC<Props> = ({
     if (!editing.源角色.trim() || !editing.目标角色.trim()) return;
     setSaving(true);
     try {
-      await saveData('characterrelations', projectId, editing);
-      if (关系列表.some(r => r.id === editing.id)) {
-        set关系列表(prev => prev.map(r => (r.id === editing.id ? editing : r)));
+      let res: Response;
+      if (editing.id) {
+        // Update: PUT /api/characters/relations/:id
+        res = await fetch(
+          `${API_BASE}/api/characters/relations/${editing.id}`,
+          {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(editing),
+          }
+        );
       } else {
-        const saved = { ...editing, id: editing.id || Date.now() };
+        // Create: POST /api/characters/project/:id/relations
+        res = await fetch(
+          `${API_BASE}/api/characters/project/${projectId}/relations`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(editing),
+          }
+        );
+      }
+      const result = await res.json();
+      const saved =
+        result.success && result.data
+          ? result.data
+          : { ...editing, id: editing.id || Date.now() };
+      if (关系列表.some(r => r.id === editing.id)) {
+        set关系列表(prev => prev.map(r => (r.id === editing.id ? saved : r)));
+      } else {
         set关系列表(prev => [...prev, saved]);
       }
       setEditing(null);
@@ -171,7 +204,7 @@ export const CharacterRelationsPanel: React.FC<Props> = ({
     }
     setDeleteConfirm(null);
     try {
-      await fetch(`${API_BASE}/api/character-relations/${id}`, {
+      await fetch(`${API_BASE}/api/characters/relations/${id}`, {
         method: 'DELETE',
         headers: getAuthHeaders(),
       });
@@ -181,23 +214,39 @@ export const CharacterRelationsPanel: React.FC<Props> = ({
 
   // ── AI generate ──
   const handleAIGenerate = async () => {
-    if (aiGenerating) return;
+    if (aiGenerating || !projectId) return;
     setAiGenerating(true);
     abortRef.current = new AbortController();
     try {
-      const existing = 关系列表
-        .map(r => `${r.源角色}-${r.目标角色}`)
-        .join('、');
+      // Fetch real character context
+      const characters = await fetchCharacterContext();
+      const 角色列表Str =
+        characters.length > 0
+          ? characters
+              .map(
+                (c: any) =>
+                  `${c.姓名 || c.name || ''}（${c.类型 || c.type || ''}，${c.身份 || c.identity || ''}）`
+              )
+              .join('\n')
+          : '';
+
+      // Format existing relations (Vue source line 38433-38437)
+      const 已有关系Str = 关系列表
+        .map(
+          r =>
+            `${r.源角色} → ${r.目标角色}：${r.关系类型}（${r.关系描述 || ''}）`
+        )
+        .join('\n');
+
       const sourcePrompt = buildCharacterRelationsSystemPrompt(
-        '(由用户提供的角色列表)',
-        existing || null
+        角色列表Str,
+        已有关系Str
       );
-      const systemPrompt = await fetchSystemPrompt();
       const messages = [
-        { role: 'system' as const, content: systemPrompt || sourcePrompt },
+        { role: 'system' as const, content: sourcePrompt },
         {
           role: 'user' as const,
-          content: `请生成角色之间的关系。\n\n${aiPrompt ? `用户要求：${aiPrompt}\n\n` : ''}${existing ? `已有关系（禁止重复）：${existing}\n\n` : ''}请输出JSON数组，每个元素：{"源角色":"角色名","目标角色":"角色名","关系类型":"师徒/朋友/同门/敌对/仇敌/追求/竞争/从属/暧昧/盟友/合作/利用/亲属/其他","关系描述":"描述(30字以内)","变化说明":"变化说明(30字以内)"}`,
+          content: aiPrompt || '',
         },
       ];
       const result = await generateValidated({
@@ -216,25 +265,30 @@ export const CharacterRelationsPanel: React.FC<Props> = ({
         maxRetries: 3,
       });
 
+      // Adopt: POST each relation to API, then refresh
       if (result && projectId) {
-        const withIds = result.data.map((r: any, i: number) => ({
-          ...r,
-          id: Date.now() + i,
-          源角色: r.源角色 || '',
-          目标角色: r.目标角色 || '',
-          变化说明: r.变化说明 || '',
-        }));
-        const merged = [...关系列表, ...withIds];
-        set关系列表(merged);
-        await saveGeneration('characterrelations', projectId, {
-          提示词: aiPrompt,
-          生成类型: '角色关系',
-          生成内容: { text: result.rawText },
-        });
-        await saveVersion('characterrelations', projectId, {
-          描述: 'AI生成角色关系',
-          内容: merged,
-        });
+        for (const r of result.data) {
+          try {
+            await fetch(
+              `${API_BASE}/api/characters/project/${projectId}/relations`,
+              {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({
+                  源角色: r.源角色 || '',
+                  目标角色: r.目标角色 || '',
+                  关系类型: r.关系类型 || '',
+                  关系描述: r.关系描述 || '',
+                  颜色: r.颜色 || '',
+                }),
+              }
+            );
+          } catch {
+            // Continue posting remaining relations even if one fails
+          }
+        }
+        // Refresh full list from server
+        await fetchRelations();
       }
     } catch (e: any) {
       if (e.name !== 'AbortError') console.error(e);
@@ -421,17 +475,27 @@ export const CharacterRelationsPanel: React.FC<Props> = ({
                   </div>
                   <div>
                     <label className="text-xs text-[var(--text-secondary)] mb-1 block">
-                      变化说明
+                      颜色
                     </label>
-                    <input
-                      type="text"
-                      className="w-full px-3 py-2 bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg text-sm focus:border-violet-500/50 focus:outline-none"
-                      placeholder="关系变化说明"
-                      value={editing.变化说明}
-                      onChange={e =>
-                        setEditing({ ...editing, 变化说明: e.target.value })
-                      }
-                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        className="w-8 h-8 rounded border border-[var(--border)] cursor-pointer bg-transparent"
+                        value={editing.颜色 || getColor(editing.关系类型)}
+                        onChange={e =>
+                          setEditing({ ...editing, 颜色: e.target.value })
+                        }
+                      />
+                      <input
+                        type="text"
+                        className="flex-1 px-3 py-2 bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg text-sm focus:border-violet-500/50 focus:outline-none"
+                        placeholder="#hex颜色"
+                        value={editing.颜色}
+                        onChange={e =>
+                          setEditing({ ...editing, 颜色: e.target.value })
+                        }
+                      />
+                    </div>
                   </div>
                   <button
                     className="w-full px-3 py-2 bg-violet-500/20 hover:bg-violet-500/30 text-violet-400 rounded-lg text-sm transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
@@ -466,7 +530,7 @@ export const CharacterRelationsPanel: React.FC<Props> = ({
               ) : (
                 <div className="space-y-2">
                   {filtered.map(item => {
-                    const color = getColor(item.关系类型);
+                    const color = item.颜色 || getColor(item.关系类型);
                     return (
                       <div
                         key={item.id}

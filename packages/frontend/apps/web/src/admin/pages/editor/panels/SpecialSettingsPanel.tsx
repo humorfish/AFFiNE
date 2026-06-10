@@ -1,82 +1,374 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import {
-  generateLLM,
-  generateValidated,
-  parseAIJSON,
-  useSystemPrompt,
-} from './panel-shared';
-import { z } from 'zod';
-import {
-  saveVersion,
-  saveGeneration,
-  saveData,
-  API_BASE,
-  getAuthHeaders,
-} from '../useWorldApi';
+import { generateLLM, parseAIJSON } from './panel-shared';
+import { API_BASE, getAuthHeaders, saveGeneration } from '../useWorldApi';
 
-// ── Source-derived prompt & pipe parsers (源码 lines 42790+) ──────────
+// ── Source-derived prompt & pipe parsers (Vue source line 42689-42819) ──
 
-function buildSpecialSettingPrompt(): string {
-  return `你是一位专业的网文金手指设计师。请设计详细完整的金手指设定。
+/** Vue source: 金手指类型说明字典 line 42697-42716 */
+const 金手指类型说明: Record<string, string> = {
+  系统流: '主角获得系统，通过系统面板、任务、奖励等方式获得成长',
+  血脉流: '主角拥有特殊血脉，血脉觉醒可以获得各种能力',
+  技能流: '主角拥有特殊技能，技能升级可以变强',
+  道具流: '主角拥有特殊道具/法宝，道具可以成长或解锁新功能',
+  宿主流: '主角作为某种高等存在的宿主，与之共生获得能力',
+  穿越赠品: '穿越/重生时获得的初始礼包或新手大礼包',
+  天命之子: '天选之人，拥有特殊命运或气运加持',
+  融合流: '与某种存在融合后获得的能力',
+  空间流: '主角拥有独立空间，可以储物、种植、修炼等',
+  签到流: '通过签到获得奖励，签到天数越长奖励越丰厚',
+  抽奖流: '通过抽奖/转盘获得随机奖励',
+  商城流: '拥有系统商城，可以购买各种物品和能力',
+  任务流: '通过完成任务获得奖励和成长',
+  重生流: '拥有重生或读档能力，可以重来或预知未来',
+  剧情流: '可以获取或影响剧情走向，知晓原著信息',
+  复制流: '可以复制他人的能力、技能或天赋',
+  进化流: '可以进化、变异或吞噬成长',
+  气运流: '可以查看或影响气运，掠夺他人气运',
+  其他: '不属于以上分类的特殊金手指',
+};
 
-输出格式要求（管道符分隔，每行一个字段）：
-N|金手指名称|金手指类型
-D|金手指描述
-O|核心功能描述
-I|功能名称|功能描述
-F|进化名称|进化描述
-E|消耗类型|消耗描述
-C|限制类型|限制描述
-L|天敌名称|天敌描述
-R|反噬描述
+/** Vue source: F(xe, ae) line 42689-42819 */
+function buildSpecialSettingsPrompt(
+  上下文: {
+    世界观信息?: {
+      世界名称: string;
+      世界类型: string;
+      势力格局: string;
+      核心规则: string;
+    };
+    力量体系列表?: {
+      体系名称: string;
+      体系类型: string;
+      体系描述: string;
+    }[];
+    功法列表?: {
+      功法名称: string;
+      功法品级: string;
+    }[];
+  } | null,
+  指定类型: string = '',
+  已有金手指名: string[] = []
+): string {
+  let s = `你是一位专业的网文金手指/系统设计师，擅长设计各类主角专属能力、系统、金手指。\n\n`;
 
-格式说明：
-- N 行：金手指名称、类型（系统流/血脉流/技能流/道具流/宿主流/穿越赠品/天命之子/融合流/空间流/签到流/抽奖流/商城流/任务流/重生流/剧情流/复制流/进化流/气运流/其他）
-- D 行：金手指的详细描述
-- O 行：核心功能概述
-- I 行：可多行，每个功能一行（功能名称、功能描述）
-- F 行：可多行，每个进化阶段一行（进化名称、进化描述）
-- E 行：消耗类型和消耗描述
-- C 行：限制类型和限制描述
-- L 行：天敌/克星名称和描述
-- R 行：反噬效果描述
+  // 【指定金手指类型】 Vue line 42697-42716
+  if (指定类型) {
+    s += `【指定金手指类型】\n用户指定生成"${指定类型}"类型的金手指。\n`;
+    const desc = 金手指类型说明[指定类型];
+    if (desc) s += `- ${指定类型}：${desc}\n`;
+    s += '\n';
+  }
 
-示例：
-N|万界商城系统|商城流
-D|连接万界商业网络，可购买各种奇珍异宝和功法秘籍
-O|通过交易获取跨世界的资源和知识
-I|万界拍卖|参加跨世界拍卖会获取珍稀物品
-I|商品鉴定|鉴定任何物品的真实价值
-F|初级商路|开启三个低级世界的商路
-F|跨界商会|建立跨界贸易网络
-E|界石|每次交易消耗一定数量的界石
-C|无法交易活物|无法购买活着的生物
-L|虚空猎手|专门猎杀跨界商人的存在
-R|过度交易会导致灵魂被商业意志侵蚀
+  // 【绝对禁止重复】 Vue line 42717-42722
+  if (已有金手指名.length > 0) {
+    s += `\n╔══════════════════════════════════════════════════════════════╗\n║  【绝对禁止重复】以下金手指名称已被使用，生成任何重复名称将导致任务失败\n╚══════════════════════════════════════════════════════════════╝\n已存在的金手指(${已有金手指名.length}个)：${已有金手指名.join('、')}\n`;
+  }
 
-要求：
-1. 金手指名称要有创意，与类型匹配
-2. 功能要有层次感，区分核心功能和辅助功能
-3. 进化路线要清晰，有明确的升级条件
-4. 限制和代价要平衡，不能过于无敌
-5. 天敌和反噬要有戏剧张力`;
+  // Context injections — Vue line 42723-42760
+  if (上下文) {
+    // 【世界观背景】 4 fields — Vue line 42724-42730
+    if (上下文.世界观信息) {
+      s += `\n【世界观背景】\n世界名称：${上下文.世界观信息.世界名称 || '未设定'}\n世界类型：${上下文.世界观信息.世界类型 || '未设定'}\n势力格局：${上下文.世界观信息.势力格局 || '未设定'}\n核心规则：${上下文.世界观信息.核心规则 || '未设定'}\n`;
+    }
+
+    // 【力量体系】 — Vue line 42731-42740
+    if (上下文.力量体系列表 && 上下文.力量体系列表.length > 0) {
+      s += `\n【力量体系】\n`;
+      上下文.力量体系列表.forEach(p => {
+        s += `- ${p.体系名称}(${p.体系类型}): ${p.体系描述?.substring(0, 50) || ''}\n`;
+      });
+    }
+
+    // 【已有功法】 max 5 — Vue line 42741-42750
+    if (上下文.功法列表 && 上下文.功法列表.length > 0) {
+      s += `\n【已有功法】\n`;
+      上下文.功法列表.slice(0, 5).forEach(sk => {
+        s += `- ${sk.功法名称}(${sk.功法品级})\n`;
+      });
+    }
+  }
+
+  // Output format — Vue line 42761-42800
+  // CRITICAL: This is the ONLY correct format. ALL field counts must match Vue exactly.
+  s += `\n\n【输出格式】（极简格式，节省token）\n`;
+  s += `N|金手指名称|金手指类型|系统形态|金手指简介\n`;
+  s += `D|金手指描述\n`;
+  s += `O|来源背景|绑定条件|绑定时间点\n`;
+  s += `I|初始状态|最终形态\n`;
+  s += `F|功能名称|功能类型|功能描述|触发方式|解锁条件\n`;
+  s += `E|效果名称|效果类型|效果描述|作用目标\n`;
+  s += `C|消耗类型|消耗名称|消耗数值|恢复方式\n`;
+  s += `L|等级序号|等级名称|等级描述|升级条件\n`;
+  s += `R|使用限制|暴露风险|使用代价|副作用\n\n`;
+
+  s += `【格式说明】\n`;
+  s += `- N: 基本信息（必填，第1行）\n`;
+  s += `  - 金手指类型：${金手指类型选项.slice(0, 8).join('/')}/...共19种\n`;
+  s += `  - 系统形态：面板系统/意识空间/契约精灵/无形系统/实体道具/被动能力/智能AI\n`;
+  s += `- D: 金手指描述（必填，10-100字）\n`;
+  s += `- O: 来源信息（可选）— 3个字段\n`;
+  s += `- I: 初始和最终状态（可选）— 2个字段\n`;
+  s += `- F: 功能（可多行，至少2-4个）— 5个字段，功能类型：核心功能/辅助功能/被动功能/隐藏功能/觉醒功能\n`;
+  s += `- E: 效果（可多行，可选）— 4个字段，效果类型：增益/获取/信息/修改/特殊\n`;
+  s += `- C: 消耗信息（可选）— 4个字段\n`;
+  s += `- L: 进化等级（可多行，可选）— 4个字段\n`;
+  s += `- R: 限制信息（可选）— 4个字段\n\n`;
+
+  s += `【重要规则】\n`;
+  s += `1. 严格按格式输出，每行一个项\n`;
+  s += `2. N行必须在第一行\n`;
+  s += `3. 不要输出任何其他内容\n`;
+  s += `4. 不要输出JSON，只输出上述管道格式\n`;
+  s += `5. ⚠️ 在输出前检查金手指名称是否与已有名称重复\n`;
+
+  return s;
 }
 
-interface PipeFunction {
+/** Vue-format pipe data — ALL field counts match Vue line 42822+ parser exactly */
+interface VuePipeFunction {
   功能名称: string;
+  功能类型: string;
   功能描述: string;
+  触发方式: string;
+  解锁条件: string;
 }
-interface PipeEvolution {
-  进化名称: string;
-  进化描述: string;
+
+interface VuePipeEffect {
+  效果名称: string;
+  效果类型: string;
+  效果描述: string;
+  作用目标: string;
 }
-interface PipeSpecialData {
+
+interface VuePipeCost {
+  消耗类型: string;
+  消耗名称: string;
+  消耗数值: string;
+  恢复方式: string;
+}
+
+interface VuePipeLevel {
+  等级序号: string;
+  等级名称: string;
+  等级描述: string;
+  升级条件: string;
+}
+
+interface VuePipeRisk {
+  使用限制: string;
+  暴露风险: string;
+  使用代价: string;
+  副作用: string;
+}
+
+interface VuePipeSpecialData {
+  金手指名称: string;
+  金手指类型: string;
+  系统形态: string;
+  金手指简介: string;
+  金手指描述: string;
+  来源背景: string;
+  绑定条件: string;
+  绑定时间点: string;
+  初始状态: string;
+  最终形态: string;
+  功能列表: VuePipeFunction[];
+  效果列表: VuePipeEffect[];
+  消耗信息: VuePipeCost | null;
+  进化列表: VuePipeLevel[];
+  限制信息: VuePipeRisk | null;
+}
+
+/** Parse Vue-format pipe: N(4) D(1) O(3) I(2) F(5) E(4) C(4) L(4) R(4) */
+function parseVueSpecialPipe(text: string): VuePipeSpecialData[] {
+  const results: VuePipeSpecialData[] = [];
+  let current: Partial<VuePipeSpecialData> | null = null;
+  let hasC = false;
+  let hasR = false;
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    if (line.startsWith('N|')) {
+      // N|金手指名称|金手指类型|系统形态|金手指简介 (4 fields)
+      if (current) results.push(current as VuePipeSpecialData);
+      const p = line.slice(2).split('|');
+      current = {
+        金手指名称: (p[0] || '').trim(),
+        金手指类型: (p[1] || '系统流').trim(),
+        系统形态: (p[2] || '面板系统').trim(),
+        金手指简介: (p[3] || '').trim(),
+        金手指描述: '',
+        来源背景: '',
+        绑定条件: '',
+        绑定时间点: '',
+        初始状态: '',
+        最终形态: '',
+        功能列表: [],
+        效果列表: [],
+        消耗信息: null,
+        进化列表: [],
+        限制信息: null,
+      };
+      hasC = false;
+      hasR = false;
+    } else if (line.startsWith('D|') && current) {
+      // D|金手指描述 (1 field)
+      current.金手指描述 = line.slice(2).trim();
+    } else if (line.startsWith('O|') && current) {
+      // O|来源背景|绑定条件|绑定时间点 (3 fields)
+      const p = line.slice(2).split('|');
+      current.来源背景 = (p[0] || '').trim();
+      current.绑定条件 = (p[1] || '').trim();
+      current.绑定时间点 = (p[2] || '').trim();
+    } else if (line.startsWith('I|') && current) {
+      // I|初始状态|最终形态 (2 fields)
+      const p = line.slice(2).split('|');
+      current.初始状态 = (p[0] || '').trim();
+      current.最终形态 = (p[1] || '').trim();
+    } else if (line.startsWith('F|') && current) {
+      // F|功能名称|功能类型|功能描述|触发方式|解锁条件 (5 fields)
+      const p = line.slice(2).split('|');
+      current.功能列表!.push({
+        功能名称: (p[0] || '').trim(),
+        功能类型: (p[1] || '核心功能').trim(),
+        功能描述: (p[2] || '').trim(),
+        触发方式: (p[3] || '手动触发').trim(),
+        解锁条件: (p[4] || '').trim(),
+      });
+    } else if (line.startsWith('E|') && current) {
+      // E|效果名称|效果类型|效果描述|作用目标 (4 fields)
+      const p = line.slice(2).split('|');
+      current.效果列表!.push({
+        效果名称: (p[0] || '').trim(),
+        效果类型: (p[1] || '增益').trim(),
+        效果描述: (p[2] || '').trim(),
+        作用目标: (p[3] || '').trim(),
+      });
+    } else if (line.startsWith('C|') && current) {
+      // C|消耗类型|消耗名称|消耗数值|恢复方式 (4 fields)
+      const p = line.slice(2).split('|');
+      if (!hasC) {
+        current.消耗信息 = {
+          消耗类型: (p[0] || '').trim(),
+          消耗名称: (p[1] || '').trim(),
+          消耗数值: (p[2] || '').trim(),
+          恢复方式: (p[3] || '').trim(),
+        };
+        hasC = true;
+      }
+    } else if (line.startsWith('L|') && current) {
+      // L|等级序号|等级名称|等级描述|升级条件 (4 fields)
+      const p = line.slice(2).split('|');
+      current.进化列表!.push({
+        等级序号: (p[0] || '').trim(),
+        等级名称: (p[1] || '').trim(),
+        等级描述: (p[2] || '').trim(),
+        升级条件: (p[3] || '').trim(),
+      });
+    } else if (line.startsWith('R|') && current) {
+      // R|使用限制|暴露风险|使用代价|副作用 (4 fields)
+      const p = line.slice(2).split('|');
+      if (!hasR) {
+        current.限制信息 = {
+          使用限制: (p[0] || '').trim(),
+          暴露风险: (p[1] || '').trim(),
+          使用代价: (p[2] || '').trim(),
+          副作用: (p[3] || '').trim(),
+        };
+        hasR = true;
+      }
+    }
+  }
+
+  if (current) results.push(current as VuePipeSpecialData);
+  return results;
+}
+
+/** Convert Vue pipe data to 金手指数据 for UI */
+function vuePipeTo金手指(pipe: VuePipeSpecialData): 金手指数据 {
+  return {
+    id: null,
+    项目ID: null,
+    金手指名称: pipe.金手指名称 || '',
+    金手指类型: pipe.金手指类型 || '系统流',
+    系统形态: pipe.系统形态 || '面板系统',
+    金手指描述: pipe.金手指描述 || '',
+    金手指简介: pipe.金手指简介 || pipe.金手指描述?.slice(0, 50) || '',
+    来源背景: pipe.来源背景 || '',
+    绑定条件: pipe.绑定条件 || '',
+    绑定时间点: pipe.绑定时间点 || '',
+    初始状态: pipe.初始状态 || '',
+    最终形态: pipe.最终形态 || '',
+    是否唯一: true,
+    是否可转让: false,
+    是否隐秘: true,
+    功能列表:
+      pipe.功能列表.length > 0
+        ? pipe.功能列表.map(f => ({
+            功能名称: f.功能名称,
+            功能类型: f.功能类型,
+            功能描述: f.功能描述,
+            触发方式: f.触发方式,
+            解锁条件: f.解锁条件,
+          }))
+        : [empty功能()],
+    效果列表:
+      pipe.效果列表.length > 0
+        ? pipe.效果列表.map(e => ({
+            效果名称: e.效果名称,
+            效果类型: e.效果类型,
+            效果描述: e.效果描述,
+            作用目标: e.作用目标,
+            效果数值: '',
+            持续时间: '',
+          }))
+        : [empty效果()],
+    消耗信息: pipe.消耗信息
+      ? {
+          消耗类型: pipe.消耗信息.消耗类型,
+          消耗名称: pipe.消耗信息.消耗名称,
+          消耗数值: pipe.消耗信息.消耗数值,
+          恢复方式: pipe.消耗信息.恢复方式,
+          透支后果: '',
+        }
+      : null,
+    进化列表:
+      pipe.进化列表.length > 0
+        ? pipe.进化列表.map((lv, i) => ({
+            等级序号: lv.等级序号 || String(i + 1),
+            等级名称: lv.等级名称,
+            等级描述: lv.等级描述,
+            升级条件: lv.升级条件,
+            属性提升: '',
+            新增功能: '',
+          }))
+        : [empty进化()],
+    限制信息: pipe.限制信息
+      ? {
+          使用限制: pipe.限制信息.使用限制,
+          暴露风险: pipe.限制信息.暴露风险,
+          副作用: pipe.限制信息.副作用 || '',
+          禁忌事项: '',
+          天敌克星: '',
+          反噬条件: '',
+          反噬后果: pipe.限制信息.使用代价,
+          失控风险: '',
+          场景限制: '',
+        }
+      : null,
+  };
+}
+
+/** Legacy pipe format parser for backward compatibility */
+interface LegacyPipeData {
   金手指名称: string;
   金手指类型: string;
   金手指描述: string;
   核心功能描述: string;
-  功能列表: PipeFunction[];
-  进化列表: PipeEvolution[];
+  功能列表: { 功能名称: string; 功能描述: string }[];
+  进化列表: { 进化名称: string; 进化描述: string }[];
   消耗类型: string;
   消耗描述: string;
   限制类型: string;
@@ -86,9 +378,9 @@ interface PipeSpecialData {
   反噬描述: string;
 }
 
-function parseSpecialPipe(text: string): PipeSpecialData[] {
-  const results: PipeSpecialData[] = [];
-  let current: PipeSpecialData | null = null;
+function parseLegacySpecialPipe(text: string): LegacyPipeData[] {
+  const results: LegacyPipeData[] = [];
+  let current: LegacyPipeData | null = null;
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('N|')) {
@@ -145,10 +437,16 @@ function parseSpecialPipe(text: string): PipeSpecialData[] {
 }
 
 function parseSpecialResponse(text: string): 金手指数据 | null {
-  // Try pipe format first
-  const pipeResults = parseSpecialPipe(text);
+  // Try Vue-format pipe first (N/D/O/I/F/E/C/L/R with correct field counts)
+  const pipeResults = parseVueSpecialPipe(text.trim());
   if (pipeResults.length > 0) {
-    const s = pipeResults[0];
+    return vuePipeTo金手指(pipeResults[0]);
+  }
+
+  // Legacy pipe format fallback (old React format with wrong field counts)
+  const legacyResults = parseLegacySpecialPipe(text.trim());
+  if (legacyResults.length > 0) {
+    const s = legacyResults[0];
     return {
       id: null,
       项目ID: null,
@@ -172,16 +470,7 @@ function parseSpecialResponse(text: string): 金手指数据 | null {
         触发方式: '手动触发',
         解锁条件: '',
       })),
-      效果列表: [
-        {
-          效果名称: '',
-          效果类型: '增益',
-          效果描述: '',
-          作用目标: '',
-          效果数值: '',
-          持续时间: '',
-        },
-      ],
+      效果列表: [empty效果()],
       消耗信息: s.消耗类型
         ? {
             消耗类型: s.消耗类型,
@@ -196,6 +485,7 @@ function parseSpecialResponse(text: string): 金手指数据 | null {
         等级名称: e.进化名称,
         等级描述: e.进化描述,
         升级条件: '',
+        属性提升: '',
         新增功能: '',
       })),
       限制信息:
@@ -214,6 +504,7 @@ function parseSpecialResponse(text: string): 金手指数据 | null {
           : null,
     };
   }
+
   // JSON fallback
   const { data: parsed } = parseAIJSON<Record<string, any>>(text);
   if (!parsed) return null;
@@ -237,8 +528,6 @@ function parseSpecialResponse(text: string): 金手指数据 | null {
 }
 
 // ── Source-derived data ────────────────────────────────────────
-
-const specialSettingsSchema = z.record(z.any());
 
 const 金手指类型选项 = [
   '系统流',
@@ -314,6 +603,7 @@ interface 进化项 {
   等级名称: string;
   等级描述: string;
   升级条件: string;
+  属性提升: string;
   新增功能: string;
 }
 
@@ -390,6 +680,7 @@ const empty进化 = (): 进化项 => ({
   等级名称: '',
   等级描述: '',
   升级条件: '',
+  属性提升: '',
   新增功能: '',
 });
 
@@ -450,10 +741,6 @@ export const SpecialSettingsPanel: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [showAIDialog, setShowAIDialog] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const fetchSystemPrompt = useSystemPrompt(
-    'AI生成金手指',
-    buildSpecialSettingPrompt()
-  );
 
   // Section collapse states
   const [collapsedSections, setCollapsedSections] = useState<
@@ -466,9 +753,12 @@ export const SpecialSettingsPanel: React.FC<Props> = ({
   useEffect(() => {
     if (!projectId) return;
     setLoading(true);
-    fetch(`${API_BASE}/api/special-settings/project/${projectId}`, {
-      headers: getAuthHeaders(),
-    })
+    fetch(
+      `${API_BASE}/api/special-settings/project/${projectId}/list?page=1&limit=100`,
+      {
+        headers: getAuthHeaders(),
+      }
+    )
       .then(res => res.json())
       .then(result => {
         if (result.success && Array.isArray(result.data)) {
@@ -502,13 +792,36 @@ export const SpecialSettingsPanel: React.FC<Props> = ({
     if (!projectId || !formData.金手指名称.trim()) return;
     setSaving(true);
     try {
-      await saveData('special-settings', projectId, formData);
+      let res: Response;
       if (formData.id) {
-        setListData(prev =>
-          prev.map(d => (d.id === formData.id ? formData : d))
+        // Update: PUT /api/special-settings/project/:id/setting/:sid
+        res = await fetch(
+          `${API_BASE}/api/special-settings/project/${projectId}/setting/${formData.id}`,
+          {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(formData),
+          }
         );
       } else {
-        const saved = { ...formData, id: Date.now(), 项目ID: projectId };
+        // Create: POST /api/special-settings/project/:id/setting
+        res = await fetch(
+          `${API_BASE}/api/special-settings/project/${projectId}/setting`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(formData),
+          }
+        );
+      }
+      const result = await res.json();
+      const saved =
+        result.success && result.data
+          ? result.data
+          : { ...formData, id: formData.id || Date.now(), 项目ID: projectId };
+      if (formData.id) {
+        setListData(prev => prev.map(d => (d.id === formData.id ? saved : d)));
+      } else {
         setListData(prev => [...prev, saved]);
         setFormData(saved);
       }
@@ -525,10 +838,13 @@ export const SpecialSettingsPanel: React.FC<Props> = ({
     }
     setDeleteConfirm(null);
     try {
-      await fetch(`${API_BASE}/api/special-settings/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      });
+      await fetch(
+        `${API_BASE}/api/special-settings/project/${projectId}/setting/${id}`,
+        {
+          method: 'DELETE',
+          headers: getAuthHeaders(),
+        }
+      );
       setListData(prev => prev.filter(d => d.id !== id));
     } catch {}
   };
@@ -540,42 +856,77 @@ export const SpecialSettingsPanel: React.FC<Props> = ({
     setAiStreamText('');
     abortRef.current = new AbortController();
     try {
-      const systemPrompt = await fetchSystemPrompt();
+      // ── getContext — Vue: GET /special-settings/project/{id}/context (API index line 13837)
+      let 上下文: {
+        世界观信息?: {
+          世界名称: string;
+          世界类型: string;
+          势力格局: string;
+          核心规则: string;
+        };
+        力量体系列表?: {
+          体系名称: string;
+          体系类型: string;
+          体系描述: string;
+        }[];
+        功法列表?: {
+          功法名称: string;
+          功法品级: string;
+        }[];
+      } | null = null;
+      if (projectId) {
+        try {
+          const ctxRes = await fetch(
+            `${API_BASE}/api/special-settings/project/${projectId}/context`,
+            { headers: getAuthHeaders() }
+          );
+          const ctxData = await ctxRes.json();
+          if (ctxData.success && ctxData.data) 上下文 = ctxData.data;
+        } catch {}
+      }
+
+      const 已有金手指名 = listData
+        .map(s => s.金手指名称)
+        .filter(n => !!n?.trim());
+      const systemPrompt = buildSpecialSettingsPrompt(
+        上下文,
+        formData.金手指类型,
+        已有金手指名
+      );
+
       const messages = [
         { role: 'system' as const, content: systemPrompt },
         {
           role: 'user' as const,
-          content: aiPrompt || '请根据世界观信息，生成完整的金手指设定',
+          content: aiPrompt || '请生成一个金手指设定。按管道格式输出。',
         },
       ];
-      const result = await generateValidated({
-        schema: specialSettingsSchema,
-        generate: attempt =>
-          generateLLM({
-            messages,
-            temperature: Math.min(1.0, 0.85 + attempt * 0.05),
-            max_tokens: 8192,
-            frequency_penalty: 0.5,
-            presence_penalty: 0.4,
-            onChunk: text => setAiStreamText(prev => prev + text),
-            signal: abortRef.current!.signal,
-          }),
-        parseResponse: text => parseSpecialResponse(text),
-        maxRetries: 3,
+
+      const fullText = await generateLLM({
+        messages,
+        temperature: 0.85,
+        max_tokens: 8192,
+        frequency_penalty: 0.5,
+        presence_penalty: 0.4,
+        onChunk: text => setAiStreamText(prev => prev + text),
+        signal: abortRef.current!.signal,
       });
-      const parsed = (result?.data ?? null) as unknown as 金手指数据 | null;
-      if (parsed && projectId) {
-        const fullText = result!.rawText;
+
+      const parsed = parseSpecialResponse(fullText);
+      if (parsed) {
         setFormData(parsed);
-        await saveGeneration('specialsettings', projectId, {
-          提示词: aiPrompt,
-          生成类型: '金手指',
-          生成内容: { text: fullText },
-        });
-        await saveVersion('specialsettings', projectId, {
-          描述: 'AI生成金手指',
-          内容: parsed,
-        });
+        // ── saveGeneration — Vue: POST /special-settings/project/{id}/generations (API index line 13845)
+        if (projectId) {
+          try {
+            await saveGeneration('specialsettings', projectId, {
+              提示词: aiPrompt || 'AI生成金手指',
+              生成类型: parsed.金手指类型 || '系统流',
+              生成内容: parsed as unknown as Record<string, any>,
+            });
+          } catch {}
+        }
+      } else {
+        // Failed to parse — keep stream text visible for manual review
       }
     } catch (e: any) {
       if (e.name !== 'AbortError') console.error(e);
@@ -1489,7 +1840,7 @@ export const SpecialSettingsPanel: React.FC<Props> = ({
                           updateField('进化列表', next);
                         }}
                       />
-                      <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="grid grid-cols-3 gap-2 text-xs">
                         <input
                           type="text"
                           className="px-2 py-1 bg-[var(--bg-card)] border border-[var(--border)] rounded focus:border-pink-500/50 focus:outline-none"
@@ -1500,6 +1851,20 @@ export const SpecialSettingsPanel: React.FC<Props> = ({
                             next[idx] = {
                               ...next[idx],
                               升级条件: e.target.value,
+                            };
+                            updateField('进化列表', next);
+                          }}
+                        />
+                        <input
+                          type="text"
+                          className="px-2 py-1 bg-[var(--bg-card)] border border-[var(--border)] rounded focus:border-pink-500/50 focus:outline-none"
+                          placeholder="属性提升"
+                          value={lv.属性提升}
+                          onChange={e => {
+                            const next = [...d.进化列表];
+                            next[idx] = {
+                              ...next[idx],
+                              属性提升: e.target.value,
                             };
                             updateField('进化列表', next);
                           }}

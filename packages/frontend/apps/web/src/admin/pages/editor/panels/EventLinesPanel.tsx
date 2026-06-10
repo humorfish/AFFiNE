@@ -1,21 +1,19 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, {
+  useState,
+  useMemo,
+  useCallback,
+  useEffect,
+  useRef,
+} from 'react';
 import { z } from 'zod';
 import {
-  useAIFieldGenerate,
   useAIFullGenerate,
   AIGenerationDialog,
   useSystemPrompt,
-  AIButton,
-  TypeOption,
-  QuickTemplate,
-  generateValidated,
+  generateLLM,
 } from './panel-shared';
-import {
-  API_BASE,
-  getAuthHeaders,
-  saveGeneration,
-  saveData,
-} from '../useWorldApi';
+import type { TypeOption, QuickTemplate } from './panel-shared';
+import { API_BASE, getAuthHeaders } from '../useWorldApi';
 
 // ── Data interfaces ──────────────────────────────────────────────────────
 
@@ -34,6 +32,12 @@ interface 事件线数据 {
   // Legacy fields
   章节标题?: string;
   已经历事件线?: string;
+  // Additional fields for compress/expand
+  心理变化?: string;
+  能力变化?: string;
+  状态变化?: string;
+  重要人物摘要?: string;
+  重要备注?: string;
 }
 
 interface Props {
@@ -135,25 +139,6 @@ const DETAIL_SECTIONS: DetailSection[] = [
   },
 ];
 
-// ── Demo data ────────────────────────────────────────────────────────────
-
-const DEMO_事件列表: 事件线数据[] = [
-  {
-    id: 3285791,
-    标题: '第1章 新章节',
-    描述: '顾尘在离厄矿州挖矿遭鞭笞，同伴老王头累死被弃。顾尘反抗监工头目时跌入偃锋残脉，造化玉录残片入体重塑本源灵枢，觉醒烬骨色禁忌符文。觉醒之力外泄震杀追来的监工头目，地底深处传来诡异心跳与嘶吼。章末顾尘浴血站立于偃锋残脉中，口袋现金0元，随身携带矿镐、已植入体内的造化玉录残片，全身多处骨折皮肉划伤，衣着破烂染血。',
-    章节号: 1,
-    章节名: '新章节',
-    卷号: 1,
-    大纲节点ID: undefined,
-    已蒸馏: true,
-    需重蒸馏: true,
-    标签列表: [],
-    已经历事件线:
-      '顾尘在离厄矿州挖矿遭鞭笞，同伴老王头累死被弃。顾尘反抗监工头目时跌入偃锋残脉，造化玉录残片入体重塑本源灵枢，觉醒烬骨色禁忌符文。觉醒之力外泄震杀追来的监工头目，地底深处传来诡异心跳与嘶吼。章末顾尘浴血站立于偃锋残脉中，口袋现金0元，随身携带矿镐、已植入体内的造化玉录残片，全身多处骨折皮肉划伤，衣着破烂染血。',
-  },
-];
-
 // ── AI generation config ─────────────────────────────────────────────────
 
 const EVENTLINE_TYPE_OPTIONS: TypeOption[] = [
@@ -221,34 +206,62 @@ export const EventLinesPanel: React.FC<Props> = ({
 }) => {
   // List view state
   const [搜索词, set搜索词] = useState('');
-  const [事件列表, set事件列表] = useState<事件线数据[]>(DEMO_事件列表);
+  const [事件列表, set事件列表] = useState<事件线数据[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // ── Data fetching ──
+  const refreshList = useCallback(() => {
+    if (!projectId) return;
+    fetch(`${API_BASE}/api/event-lines/project/${projectId}/list`, {
+      headers: getAuthHeaders(),
+    })
+      .then(res => res.json())
+      .then(result => {
+        if (result.success && Array.isArray(result.data))
+          set事件列表(result.data);
+      })
+      .catch(() => {});
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    setLoading(true);
+    fetch(`${API_BASE}/api/event-lines/project/${projectId}/list`, {
+      headers: getAuthHeaders(),
+    })
+      .then(res => res.json())
+      .then(result => {
+        if (result.success && Array.isArray(result.data))
+          set事件列表(result.data);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [projectId]);
+
+  // ── getContext for AI generation ──
+  const [eventContext, setEventContext] = useState<any>(null);
+
+  const fetchEventContext = useCallback(async () => {
+    if (!projectId) return null;
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/event-lines/project/${projectId}/context`,
+        { headers: getAuthHeaders() }
+      );
+      const result = await res.json();
+      if (result.success && result.data) {
+        setEventContext(result.data);
+        return result.data;
+      }
+    } catch {}
+    return null;
+  }, [projectId]);
 
   // AI generation
   const fetchSystemPrompt = useSystemPrompt(
     'AI生成事件线',
     EVENTLINE_SYSTEM_PROMPT
   );
-  const buildExistingStr = useCallback(
-    (excludeField?: string) => {
-      return 事件列表.map(e => `${e.标题}: ${e.描述}`).join('\n');
-    },
-    [事件列表]
-  );
-  const fieldGen = useAIFieldGenerate({
-    module: 'eventlines',
-    projectId,
-    data: 事件列表.reduce(
-      (acc, e) => {
-        acc[`event_${e.id}`] = e.描述;
-        return acc;
-      },
-      {} as Record<string, string>
-    ),
-    setData: () => {},
-    fetchSystemPrompt,
-    buildExistingStr,
-    schema: eventLineSchema,
-  });
   const fullGen = useAIFullGenerate({
     module: 'eventlines',
     projectId,
@@ -295,9 +308,223 @@ export const EventLinesPanel: React.FC<Props> = ({
     },
     schema: eventLineSchema,
     defaultType: '主线事件',
-    buildUserMessage: (type, desc) =>
-      `请为我生成一条事件线的详细内容。\n\n事件类型：${type}${desc ? '\n\n' + desc : ''}\n\n请按管道格式输出。`,
+    buildUserMessage: (type, desc) => {
+      let msg = `请为我生成事件线的详细内容。\n\n事件类型：${type}`;
+      if (eventContext) {
+        if (eventContext.世界观) {
+          msg += `\n\n【世界观背景】\n世界名称：${eventContext.世界观.世界名称 || ''}\n世界类型：${eventContext.世界观.世界类型 || ''}\n核心规则：${eventContext.世界观.核心规则 || ''}`;
+        }
+        if (eventContext.故事核心) {
+          msg += `\n\n【故事核心】\n核心主题：${eventContext.故事核心.核心主题 || ''}\n核心冲突：${eventContext.故事核心.核心冲突 || ''}`;
+        }
+        if (eventContext.现有角色?.length > 0) {
+          msg += `\n\n【现有角色】\n${eventContext.现有角色
+            .slice(0, 5)
+            .map((c: any) => `- ${c.姓名}（${c.类型}）`)
+            .join('\n')}`;
+        }
+      }
+      if (desc) msg += `\n\n${desc}`;
+      msg += '\n\n请按管道格式输出。';
+      return msg;
+    },
   });
+
+  // ── AI compress handler ──
+  const [compressing, setCompressing] = useState(false);
+  const abortCompressRef = useRef<AbortController | null>(null);
+
+  const handleAICompress = async () => {
+    if (compressing || !projectId) return;
+    setCompressing(true);
+    abortCompressRef.current = new AbortController();
+    try {
+      // Fetch context first (角色存续状态 etc.)
+      const ctx = await fetchEventContext();
+
+      // Build event data for compress prompt — includes 3 injection items from Vue
+      // Injection 1: 角色存活状态 (from eventContext.现有角色)
+      const 角色存活信息 =
+        ctx?.现有角色?.length > 0
+          ? ctx.现有角色
+              .slice(0, 10)
+              .map(
+                (c: any) =>
+                  `${c.姓名}(${c.类型 || '未知'}): ${c.存续状态 || c.状态 || '活跃'}`
+              )
+              .join('；')
+          : '当前所有角色均为活跃状态。';
+
+      // Injection 2: 写作进度 (from eventContext.写作进度 or derived from 事件列表)
+      const 写作进度信息 = ctx?.写作进度
+        ? `已写到第${ctx.写作进度.当前章节 || '?'}章，共${ctx.写作进度.总章数 || '?'}章`
+        : ctx?.大纲进度
+          ? `大纲进度：${ctx.大纲进度}`
+          : 事件列表.length > 0
+            ? `当前写作进度：共${事件列表.length}章有事件记录。`
+            : '无写作进度信息';
+
+      // Injection 3: 用户需求 (custom requirement, if any)
+      const 用户需求信息 = ctx?.用户需求 || ctx?.故事核心?.核心主题 || '';
+
+      let K = '';
+      for (const F of 事件列表) {
+        K += `[大纲节点ID=${F.大纲节点ID}] ${F.标题 || F.章节标题}：\n`;
+        K += `  已经历事件线：${F.已经历事件线 || '无'}\n`;
+        K += `  心理变化：${F.心理变化 || '无'}\n`;
+        K += `  能力变化：${F.能力变化 || '无'}\n`;
+        K += `  状态变化：${F.状态变化 || '无'}\n`;
+        K += `  重要人物摘要：${F.重要人物摘要 || '无'}\n`;
+        K += `  重要备注：${F.重要备注 || '无'}\n\n`;
+      }
+
+      const systemPrompt = `你是一个小说事件线分析专家。请逐条分析以下各章节的主角已历事件线数据，判断每条是否需要压缩归档。
+
+${角色存活信息}
+${写作进度信息}
+${用户需求信息 ? `用户特殊要求：${用户需求信息}` : ''}
+判断标准：
+- 如果涉及的角色已死亡或已退场（参考角色存续状态），相关事件应压缩归档
+- 如果心理状态已被后续章节的新心理变化覆盖（即后面章节有更新的心理描述），应压缩归档
+- 如果能力/状态变化已经在后续章节发生了新的变化（后面章节有更新的描述），应压缩归档
+- 如果事件涉及的伏笔或悬念已在后续章节中解决，应压缩归档
+- 如果信息仍然影响后续剧情发展、角色仍然活跃、状态仍然有效，保留为活跃
+
+对需要压缩的章节，综合所有"有效"字段的核心信息，生成≤80字的压缩摘要，保留关键转折和重要信息。
+
+章节事件线数据：
+${K}
+## 输出格式（极简行格式，每条事件线输出一行，用|分隔字段）
+EC|大纲节点ID|章节标题|压缩动作|原文字数|压缩后字数|压缩摘要|字段状态JSON
+
+### 字段说明
+- EC：固定前缀标记
+- 大纲节点ID：纯数字
+- 章节标题：与输入完全一致的原标题
+- 压缩动作：compress（压缩归档）或 keep（保留为活跃）
+- 原文字数：该章事件线各字段的原始总字数
+- 压缩后字数：压缩摘要的字数（keep时与原文字数相同）
+- 压缩摘要：≤80字的核心信息摘要（keep时填写"-"）
+- 字段状态JSON：如 {"心理变化":"已完结","能力变化":"有效","状态变化":"有效"}
+
+### 重要规则
+1. 每条事件线都必须输出一行，不可遗漏
+2. 字段内容中不允许出现|符号
+3. 字段状态JSON中的值只能是"有效"或"已完结"
+4. 只输出EC行，不要输出其他任何内容`;
+
+      const messages = [
+        {
+          role: 'system' as const,
+          content:
+            '你是一个专业的小说事件线分析助手。你需要根据角色存续状态、事件发展脉络和章节间的信息覆盖关系，准确判断每个章节事件线是否需要压缩归档。严格按照EC|...|...|...|...|...|...|{...}格式逐行输出，不要输出任何其他内容。',
+        },
+        { role: 'user' as const, content: systemPrompt },
+      ];
+
+      const fullText = await generateLLM({
+        messages,
+        max_tokens: 4096,
+        onChunk: () => {},
+        signal: abortCompressRef.current.signal,
+      });
+
+      // Parse EC| lines and apply compress results — Vue writes compressed data back
+      const ecResults: {
+        大纲节点ID: string;
+        章节标题: string;
+        压缩动作: string;
+        原文字数: number;
+        压缩后字数: number;
+        压缩摘要: string;
+        字段状态: Record<string, string>;
+      }[] = [];
+      const lines = fullText
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.startsWith('EC|'));
+      for (const line of lines) {
+        const parts = line.slice(3).split('|');
+        if (parts.length >= 8) {
+          try {
+            ecResults.push({
+              大纲节点ID: (parts[0] || '').trim(),
+              章节标题: (parts[1] || '').trim(),
+              压缩动作: (parts[2] || '').trim(),
+              原文字数: parseInt(parts[3]) || 0,
+              压缩后字数: parseInt(parts[4]) || 0,
+              压缩摘要: (parts[5] || '').trim(),
+              字段状态: (() => {
+                try {
+                  return JSON.parse(parts.slice(6).join('|'));
+                } catch {
+                  return {};
+                }
+              })(),
+            });
+          } catch {}
+        }
+      }
+
+      if (ecResults.length > 0) {
+        let successCount = 0;
+        let failCount = 0;
+        for (const ec of ecResults) {
+          if (ec.压缩动作 !== 'compress') continue;
+          // Match by 大纲节点ID or 章节标题 (same logic as Vue)
+          const nodeIdStr = String(ec.大纲节点ID || '').replace(/[^\d]/g, '');
+          const chapterTitle = String(ec.章节标题 || '');
+          const matchedEvent = 事件列表.find(e => {
+            const eId = String(e.大纲节点ID || '');
+            return !!(
+              (nodeIdStr && eId === nodeIdStr) ||
+              (e.章节标题 && e.章节标题 === chapterTitle) ||
+              (e.章节标题 &&
+                chapterTitle &&
+                (chapterTitle.includes(e.章节标题) ||
+                  e.章节标题.includes(chapterTitle))) ||
+              (e.标题 && e.标题 === chapterTitle) ||
+              (e.标题 &&
+                chapterTitle &&
+                (chapterTitle.includes(e.标题) ||
+                  e.标题.includes(chapterTitle)))
+            );
+          });
+          if (matchedEvent) {
+            try {
+              await fetch(
+                `${API_BASE}/api/event-lines/project/${projectId}/event/${matchedEvent.id}`,
+                {
+                  method: 'PUT',
+                  headers: getAuthHeaders(),
+                  body: JSON.stringify({
+                    ...matchedEvent,
+                    需重蒸馏: false,
+                    记忆状态: '已压缩',
+                    压缩档案: ec.压缩摘要 || '',
+                    字段状态: ec.字段状态 || {},
+                  }),
+                }
+              );
+              successCount++;
+            } catch {
+              failCount++;
+            }
+          } else {
+            failCount++;
+          }
+        }
+        console.log(
+          `AI压缩完成：成功${successCount}条${failCount > 0 ? `，失败${failCount}条` : ''}`
+        );
+      }
+      refreshList();
+    } catch (e: any) {
+      if (e.name !== 'AbortError') console.error(e);
+    } finally {
+      setCompressing(false);
+    }
+  };
 
   // Detail view state
   const [展开事件ID, set展开事件ID] = useState<number | null>(null);
@@ -387,8 +614,28 @@ export const EventLinesPanel: React.FC<Props> = ({
                   </button>
                   <button
                     className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg text-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                    onClick={() => {
-                      /* TODO: wire to save API */
+                    onClick={async () => {
+                      if (!展开事件 || !projectId) return;
+                      const updated = {
+                        ...展开事件,
+                        大纲节点ID: 编辑大纲节点ID
+                          ? Number(编辑大纲节点ID)
+                          : undefined,
+                        标题: 编辑章节标题,
+                      };
+                      try {
+                        await fetch(
+                          `${API_BASE}/api/event-lines/project/${projectId}/event/${updated.id}`,
+                          {
+                            method: 'PUT',
+                            headers: getAuthHeaders(),
+                            body: JSON.stringify(updated),
+                          }
+                        );
+                        set事件列表(prev =>
+                          prev.map(e => (e.id === updated.id ? updated : e))
+                        );
+                      } catch {}
                     }}
                   >
                     <i className="ri-save-line" /> 保存
@@ -553,24 +800,52 @@ export const EventLinesPanel: React.FC<Props> = ({
                 <button
                   className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 rounded-lg text-sm transition-colors flex items-center gap-1.5"
                   title="AI生成事件"
-                  onClick={fullGen.open}
+                  onClick={async () => {
+                    await fetchEventContext();
+                    fullGen.open();
+                  }}
                 >
                   <i className="ri-sparkles-line" /> AI生成
                 </button>
                 <button
-                  className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg text-sm transition-colors flex items-center gap-1.5"
+                  className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg text-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
                   title="AI压缩事件"
-                  onClick={() => {
-                    /* TODO: wire to AI compress API */
-                  }}
+                  onClick={handleAICompress}
+                  disabled={compressing}
                 >
-                  <i className="ri-compress-line" /> AI压缩
+                  <i
+                    className={
+                      compressing
+                        ? 'ri-loader-4-line animate-spin'
+                        : 'ri-compress-line'
+                    }
+                  />{' '}
+                  {compressing ? '压缩中...' : 'AI压缩'}
                 </button>
                 <button
                   className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg text-sm transition-colors flex items-center gap-1.5"
                   title="新建事件"
-                  onClick={() => {
-                    /* TODO: wire to create API */
+                  onClick={async () => {
+                    if (!projectId) return;
+                    try {
+                      const res = await fetch(
+                        `${API_BASE}/api/event-lines/project/${projectId}/event`,
+                        {
+                          method: 'POST',
+                          headers: getAuthHeaders(),
+                          body: JSON.stringify({
+                            标题: '新事件线',
+                            描述: '',
+                            章节号: 0,
+                            卷号: 0,
+                          }),
+                        }
+                      );
+                      const result = await res.json();
+                      if (result.success && result.data) {
+                        set事件列表(prev => [...prev, result.data]);
+                      }
+                    } catch {}
                   }}
                 >
                   <i className="ri-add-line" /> 新建
@@ -601,7 +876,11 @@ export const EventLinesPanel: React.FC<Props> = ({
 
               {/* Event cards */}
               <div className="space-y-2">
-                {过滤后事件.length > 0 ? (
+                {loading ? (
+                  <div className="text-center py-8 text-[var(--text-secondary)] text-sm">
+                    加载中...
+                  </div>
+                ) : 过滤后事件.length > 0 ? (
                   过滤后事件.map(事件 => {
                     const defaultTags =
                       事件.标签列表 && 事件.标签列表.length > 0
@@ -648,8 +927,23 @@ export const EventLinesPanel: React.FC<Props> = ({
                                       <button
                                         className="px-1.5 py-0.5 rounded text-[10px] bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 transition-colors disabled:opacity-50"
                                         title="重新蒸馏"
-                                        onClick={e => {
-                                          e.stopPropagation(); /* TODO: wire to redistill API */
+                                        onClick={async e => {
+                                          e.stopPropagation();
+                                          if (!projectId) return;
+                                          try {
+                                            await fetch(
+                                              `${API_BASE}/api/event-lines/project/${projectId}/event/${事件.id}`,
+                                              {
+                                                method: 'PUT',
+                                                headers: getAuthHeaders(),
+                                                body: JSON.stringify({
+                                                  ...事件,
+                                                  需重蒸馏: false,
+                                                }),
+                                              }
+                                            );
+                                            refreshList();
+                                          } catch {}
                                         }}
                                       >
                                         <i className="text-xs ri-refresh-line" />
@@ -716,8 +1010,22 @@ export const EventLinesPanel: React.FC<Props> = ({
                               <button
                                 className="p-1 text-blue-400 transition-all rounded opacity-0 group-hover:opacity-100 hover:bg-blue-500/20"
                                 title="归档"
-                                onClick={e => {
-                                  e.stopPropagation(); /* TODO: wire to archive API */
+                                onClick={async e => {
+                                  e.stopPropagation();
+                                  if (!projectId) return;
+                                  try {
+                                    await fetch(
+                                      `${API_BASE}/api/event-lines/project/${projectId}/${事件.id}/status`,
+                                      {
+                                        method: 'PUT',
+                                        headers: getAuthHeaders(),
+                                        body: JSON.stringify({
+                                          状态: 'archived',
+                                        }),
+                                      }
+                                    );
+                                    refreshList();
+                                  } catch {}
                                 }}
                               >
                                 <i className="text-sm ri-archive-line" />
@@ -725,8 +1033,21 @@ export const EventLinesPanel: React.FC<Props> = ({
                               <button
                                 className="p-1 text-red-400 transition-all rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20"
                                 title="删除事件线"
-                                onClick={e => {
-                                  e.stopPropagation(); /* TODO: wire to delete API */
+                                onClick={async e => {
+                                  e.stopPropagation();
+                                  if (!projectId) return;
+                                  try {
+                                    await fetch(
+                                      `${API_BASE}/api/event-lines/project/${projectId}/event/${事件.id}`,
+                                      {
+                                        method: 'DELETE',
+                                        headers: getAuthHeaders(),
+                                      }
+                                    );
+                                    set事件列表(prev =>
+                                      prev.filter(e => e.id !== 事件.id)
+                                    );
+                                  } catch {}
                                 }}
                               >
                                 <i className="text-sm ri-delete-bin-line" />
@@ -774,7 +1095,28 @@ export const EventLinesPanel: React.FC<Props> = ({
           typeOptions={EVENTLINE_TYPE_OPTIONS}
           quickTemplates={EVENTLINE_QUICK_TEMPLATES}
           onStart={fullGen.start}
-          onAdopt={fullGen.adopt}
+          onAdopt={async () => {
+            if (!fullGen.parsed || !projectId) return;
+            const entries = Object.entries(fullGen.parsed);
+            for (const [key, value] of entries) {
+              try {
+                const title = key.replace(/^事件\d+_/, '');
+                await fetch(
+                  `${API_BASE}/api/event-lines/project/${projectId}/upsert`,
+                  {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                      标题: title,
+                      描述: value,
+                    }),
+                  }
+                );
+              } catch {}
+            }
+            refreshList();
+            fullGen.close();
+          }}
           onClose={fullGen.close}
         />
       </div>

@@ -1,25 +1,15 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { z } from 'zod';
-import { useWorldApi, saveVersion } from '../useWorldApi';
+import { useWorldApi, API_BASE, getAuthHeaders } from '../useWorldApi';
 import {
   useAIGenerate,
-  parseAIJSON,
-  useAIFieldGenerate,
   useAIFullGenerate,
   AIGenerationDialog,
   useSystemPrompt,
-  AIButton,
-  TypeOption,
-  QuickTemplate,
   generateValidated,
 } from './panel-shared';
-import {
-  saveGeneration,
-  saveData,
-  API_BASE,
-  getAuthHeaders,
-} from '../useWorldApi';
+import type { TypeOption, QuickTemplate } from './panel-shared';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -33,31 +23,24 @@ interface 卷数据 {
   标签?: string;
 }
 
-interface 章节关联 {
-  章节序号: number;
-  章节标题: string;
-  要点: string;
-}
-
-interface 要素数据 {
-  内容: string;
-  章节关联: 章节关联[];
-}
-
+/** Matches Vue event-flow data model — flat strings for 七要素 */
 interface 事件数据 {
   id: number;
   序号: number;
   名称: string;
-  卷id: number;
-  欲望: 要素数据;
-  阻碍: 要素数据;
-  行动: 要素数据;
-  结果: 要素数据;
-  意外: 要素数据;
-  转折: 要素数据;
-  结局: 要素数据;
-  涉及支线?: string;
-  暗线伏笔?: string;
+  所属卷序号: number;
+  欲望: string;
+  阻碍: string;
+  行动: string;
+  结果: string;
+  意外: string;
+  转折: string;
+  结局: string;
+  涉及角色: string[]; // array of character names
+  涉及支线: string[]; // array of plotline names
+  关键节点名称?: string;
+  关键节点序号?: number;
+  排序顺序?: number;
 }
 
 interface Props {
@@ -66,7 +49,7 @@ interface Props {
   leftOffset?: number;
 }
 
-/* ─── Pipe-format prompt & parser for sidestories ─── */
+/* ─── Pipe-format prompt & parser for sidestories (flat field generation) ─── */
 
 /** Parse pipe-delimited format like: 支线概述|xxx\n关键转折|xxx\n主线关联|xxx */
 function parseSidestoryPipe(text: string): Record<string, string> | null {
@@ -112,28 +95,91 @@ function parseSidestoryResponse(text: string): Record<string, string> | null {
   return null;
 }
 
-/** Build system prompt for event-flow generation (七要素 pipe format) */
-function buildEventFlowSystemPrompt(): string {
-  return `你是一个专业的小说创作助手。请根据给定的信息生成支线故事事件流。
+/* ─── EV 12-field pipe format for event-flow (matches Vue line 181690-181714) ─── */
 
-输出格式要求（严格按此格式）：
-每个事件用 === 分隔，事件内每行格式为：
-名称|事件名称
-序号|数字
-卷id|数字
-欲望|描述
-阻碍|描述
-行动|描述
-结果|描述
-意外|描述
-转折|描述
-结局|描述
+/** Build EV 12-field pipe format prompt — matches Vue line 181690-181714 */
+function buildEventFlowSystemPrompt(params: {
+  事件条数: number;
+  开始卷序号: number;
+  结束卷序号: number;
+  卷标题映射: Record<number, string>;
+  指定角色列表?: string[];
+  情节脉络约束?: string;
+  用户提示词?: string;
+  上下文摘要?: string;
+}): string {
+  const { 事件条数: ps, 开始卷序号: Bt, 结束卷序号: Xt } = params;
+  const isMultiVolume = Bt !== Xt;
 
-不要输出JSON，不要输出markdown代码块标记。`;
+  let system = `你是一个专业的小说事件流设计师。
+
+## 输出格式（极其重要，必须严格遵守）
+每个事件占一行，使用竖线分隔，共12个字段（EV开头 + 11个竖线分隔字段），格式如下：
+EV|字段1-所属卷序号|字段2-事件名称|字段3-欲望|字段4-阻碍|字段5-行动|字段6-结果|字段7-意外|字段8-转折|字段9-结局|字段10-涉及角色|字段11-涉及支线
+
+⚠️ 字段类型严格区分：
+- 字段3~9（欲望、阻碍、行动、结果、意外、转折、结局）：必须是200-400字的剧情叙事描写，有画面感和细节感
+- 字段10（涉及角色）：只写角色名，用英文逗号分隔，如"林玄,张三"，此字段必须填写不能留空
+- 字段11（涉及支线）：只写支线名，用英文逗号分隔，如"师门恩怨线,情感线"，没有则留空
+- ❌ 绝对禁止：把角色名写进「结局」字段！结局字段必须是叙事内容！
+
+【强制规则】
+1. 必须且只能生成恰好 ${ps} 条事件（这是跨所有目标卷的总数上限，不是每卷数量），不多不少；若涉及多个卷，请将这 ${ps} 条事件合理分配到各卷，而不是在每一卷都单独输出 ${ps} 条
+2. 每行以EV|开头，字段之间用|分隔，每行必须恰好有12个字段（含EV前缀共12段）
+3. 只输出EV行，不要输出任何其他文字、标题、解释、JSON
+4. 字段3~9（欲望到结局）的每个字段必须是200-400字的充实剧情叙事，有强烈的画面感、细腻的细节感和丰富的情感层次
+5. 字段10「涉及角色」必须填写该场景中出场的所有角色名，用英文逗号分隔，绝对不能留空
+6. 字段11「涉及支线」用英文逗号分隔，如"师门恩怨线,情感线"，没有则留空
+7. ❌ 结局字段（字段9）必须是叙事描写，绝对不能写角色名列表！角色名只能出现在字段10
+8. ❌ 绝对禁止把事件条数按「每卷」重复下发：例如要求 5 条跨 3 卷时，最终输出必须恰好 5 行 EV，而不是 15 行`;
+
+  // Volume range constraint (matches Vue line 181779)
+  if (!isMultiVolume) {
+    system += `\n9. 字段1「所属卷序号」仅允许取值 ${Bt}，本次只为第${Bt}卷生成事件，绝对禁止出现 ${Bt} 以外的任何卷序号`;
+  } else {
+    system += `\n9. 字段1「所属卷序号」仅允许取值 ${Bt}~${Xt}，请将事件合理分配到这些卷中`;
+  }
+
+  return system;
 }
 
-/** Parse pipe-delimited event-flow format (events separated by ===) */
-function parseEventFlowPipe(text: string): Array<Partial<事件数据>> | null {
+/** Parse EV 12-field pipe format — matches Vue output */
+function parseEventFlowEV(text: string): Array<Partial<事件数据>> | null {
+  const lines = text
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('EV|'));
+  if (lines.length === 0) return null;
+
+  const events: Array<Partial<事件数据>> = [];
+  for (const line of lines) {
+    const fields = line.split('|');
+    if (fields.length < 12) continue; // EV + 11 fields
+    events.push({
+      所属卷序号: parseInt(fields[1], 10) || 1,
+      名称: fields[2] || '',
+      欲望: fields[3] || '',
+      阻碍: fields[4] || '',
+      行动: fields[5] || '',
+      结果: fields[6] || '',
+      意外: fields[7] || '',
+      转折: fields[8] || '',
+      结局: fields[9] || '',
+      涉及角色: (fields[10] || '')
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter(Boolean),
+      涉及支线: (fields[11] || '')
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter(Boolean),
+    });
+  }
+  return events.length > 0 ? events : null;
+}
+
+/** Parse old ===-separated pipe format (legacy fallback) — flat strings */
+function parseEventFlowOldPipe(text: string): Array<Partial<事件数据>> | null {
   const blocks = text
     .split(/===+/)
     .map(b => b.trim())
@@ -144,6 +190,7 @@ function parseEventFlowPipe(text: string): Array<Partial<事件数据>> | null {
     名称: '名称',
     序号: '序号',
     卷id: '卷id',
+    所属卷序号: '所属卷序号',
     欲望: '欲望',
     阻碍: '阻碍',
     行动: '行动',
@@ -152,7 +199,7 @@ function parseEventFlowPipe(text: string): Array<Partial<事件数据>> | null {
     转折: '转折',
     结局: '结局',
     涉及支线: '涉及支线',
-    暗线伏笔: '暗线伏笔',
+    涉及角色: '涉及角色',
   };
   for (const block of blocks) {
     const lines = block.split('\n').filter(l => l.trim());
@@ -169,22 +216,23 @@ function parseEventFlowPipe(text: string): Array<Partial<事件数据>> | null {
       }
     }
     if (evt['名称'] || evt['序号']) {
-      // Convert numeric fields
       if (evt['序号']) evt['序号'] = Number(evt['序号']) || 0;
-      if (evt['卷id']) evt['卷id'] = Number(evt['卷id']) || 0;
-      // Wrap 七要素 into {内容, 章节关联: []}
-      for (const k of [
-        '欲望',
-        '阻碍',
-        '行动',
-        '结果',
-        '意外',
-        '转折',
-        '结局',
-      ]) {
-        if (typeof evt[k] === 'string') {
-          evt[k] = { 内容: evt[k], 章节关联: [] };
-        }
+      // Map 卷id → 所属卷序号 for old format
+      if (evt['卷id'] && !evt['所属卷序号']) {
+        evt['所属卷序号'] = Number(evt['卷id']) || 1;
+      }
+      // Convert comma-separated strings to arrays for 涉及角色/涉及支线
+      if (typeof evt['涉及角色'] === 'string') {
+        evt['涉及角色'] = (evt['涉及角色'] as string)
+          .split(',')
+          .map((s: string) => s.trim())
+          .filter(Boolean);
+      }
+      if (typeof evt['涉及支线'] === 'string') {
+        evt['涉及支线'] = (evt['涉及支线'] as string)
+          .split(',')
+          .map((s: string) => s.trim())
+          .filter(Boolean);
       }
       events.push(evt as Partial<事件数据>);
     }
@@ -192,11 +240,15 @@ function parseEventFlowPipe(text: string): Array<Partial<事件数据>> | null {
   return events.length > 0 ? events : null;
 }
 
-/** Combined parser for event flow: pipe first, then JSON fallback */
+/** Combined parser for event flow: EV format first, then old pipe, then JSON fallback */
 function parseEventFlowResponse(text: string): Array<Partial<事件数据>> | null {
   if (!text) return null;
-  const pipeResult = parseEventFlowPipe(text.trim());
-  if (pipeResult && pipeResult.length > 0) return pipeResult;
+  // Try EV 12-field format first (Vue standard)
+  const evResult = parseEventFlowEV(text.trim());
+  if (evResult && evResult.length > 0) return evResult;
+  // Fallback: old === separated format
+  const oldPipeResult = parseEventFlowOldPipe(text.trim());
+  if (oldPipeResult && oldPipeResult.length > 0) return oldPipeResult;
   // JSON fallback
   try {
     const parsed = JSON.parse(text);
@@ -217,76 +269,188 @@ function parseEventFlowResponse(text: string): Array<Partial<事件数据>> | nu
   return null;
 }
 
-/** Build system prompt for chapter-association recommendation */
-function buildChapterAssocSystemPrompt(): string {
-  return `你是一个专业的小说创作助手。请为事件要素智能推荐关联章节。
+/* ─── Context builder (matches Vue ie() line 180976-181243) ─── */
 
-输出格式要求（严格按此格式）：
-每个关联推荐用 --- 分隔，推荐内容格式：
-章节序号|数字
-章节标题|标题文字
-要点|关联要点描述
+/** Fetch event-flow context from multiple API modules — matches Vue ie() line 180976-181243 */
+async function fetchEventFlowContext(projectId: number): Promise<string> {
+  const parts: string[] = [];
+  const headers = getAuthHeaders();
 
-不要输出JSON，不要输出markdown代码块标记。`;
-}
-
-/** Parse pipe-delimited chapter association format */
-function parseChapterAssocPipe(
-  text: string
-): Array<{ 章节序号: number; 章节标题: string; 要点: string }> | null {
-  const blocks = text
-    .split(/---+/)
-    .map(b => b.trim())
-    .filter(Boolean);
-  if (blocks.length === 0) return null;
-  const results: Array<{ 章节序号: number; 章节标题: string; 要点: string }> =
-    [];
-  for (const block of blocks) {
-    const lines = block.split('\n').filter(l => l.trim());
-    let 章节序号 = 0,
-      章节标题 = '',
-      要点 = '';
-    for (const line of lines) {
-      const pipeIdx = line.indexOf('|');
-      if (pipeIdx > 0) {
-        const key = line.substring(0, pipeIdx).trim();
-        const val = line.substring(pipeIdx + 1).trim();
-        if (key === '章节序号') 章节序号 = Number(val) || 0;
-        else if (key === '章节标题') 章节标题 = val;
-        else if (key === '要点') 要点 = val;
+  async function fetchModule(
+    label: string,
+    url: string,
+    formatter: (data: any) => string
+  ) {
+    try {
+      const res = await fetch(url, { headers });
+      const result = await res.json();
+      if (result.success && result.data) {
+        const text = formatter(result.data);
+        if (text) parts.push(`【${label}】\n${text}`);
       }
-    }
-    if (章节标题 || 要点) {
-      results.push({ 章节序号, 章节标题, 要点 });
-    }
+    } catch {}
   }
-  return results.length > 0 ? results : null;
-}
 
-/** Combined parser for chapter association: pipe first, then JSON fallback */
-function parseChapterAssocResponse(
-  text: string
-): Array<{ 章节序号: number; 章节标题: string; 要点: string }> | null {
-  if (!text) return null;
-  const pipeResult = parseChapterAssocPipe(text.trim());
-  if (pipeResult && pipeResult.length > 0) return pipeResult;
-  try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) return parsed;
-  } catch {}
-  const codeMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
-  if (codeMatch)
-    try {
-      const parsed = JSON.parse(codeMatch[1]);
-      if (Array.isArray(parsed)) return parsed;
-    } catch {}
-  const bracketMatch = text.match(/\[[\s\S]*\]/);
-  if (bracketMatch)
-    try {
-      const parsed = JSON.parse(bracketMatch[0]);
-      if (Array.isArray(parsed)) return parsed;
-    } catch {}
-  return null;
+  await Promise.all([
+    fetchModule(
+      '世界观',
+      `${API_BASE}/api/worldviews/project/${projectId}`,
+      (d: any) =>
+        [
+          '世界名称',
+          '世界类型',
+          '时代背景',
+          '核心规则',
+          '主要冲突',
+          '地理环境',
+          '社会结构',
+        ]
+          .filter(k => d[k])
+          .map(k => `${k}：${d[k]}`)
+          .join('\n')
+    ),
+    fetchModule(
+      '故事核心',
+      `${API_BASE}/api/story-cores/project/${projectId}`,
+      (d: any) =>
+        ['核心主题', '核心冲突', '重大赌注', '预期悬念', '结局方向']
+          .filter(k => d[k])
+          .map(k => `${k}：${d[k]}`)
+          .join('\n')
+    ),
+    fetchModule(
+      '货币体系',
+      `${API_BASE}/api/currencies/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.货币名称}(${o.货币类型 || '基础'})：${o.货币定义 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '力量体系',
+      `${API_BASE}/api/power-systems/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.体系名称}(${o.体系类型 || '修炼类'})：${o.体系描述 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '特殊设定',
+      `${API_BASE}/api/special-settings/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.金手指名称 || o.设定名称}：${o.金手指描述 || o.设定描述 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '情节脉络',
+      `${API_BASE}/api/plot-structures/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `第${o.幕序号 || '?'}幕「${o.幕名称 || ''}」：${o.内容概要 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '角色表',
+      `${API_BASE}/api/characters/project/${projectId}`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.姓名}(${o.角色类型 || '配角'})：${o.身份 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '伏笔列表',
+      `${API_BASE}/api/foreshadows/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.伏笔名称}(${o.伏笔状态 || '已埋设'})：${o.伏笔描述 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '势力阵营',
+      `${API_BASE}/api/factions/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.势力名称}(${o.势力类型 || '组织'})：${o.势力描述 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '地理地图',
+      `${API_BASE}/api/geo-maps/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.地图名称}(${o.地图类型 || '地图'})：${o.地图描述 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '功法体系',
+      `${API_BASE}/api/skill-systems/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.功法名称}(${o.功法品级 || '普通'})：${o.功法描述 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+    fetchModule(
+      '物品列表',
+      `${API_BASE}/api/items/project/${projectId}/list`,
+      (d: any[]) =>
+        Array.isArray(d) && d.length > 0
+          ? d
+              .map(
+                (o: any) =>
+                  `${o.物品名称}(${o.类别 || '道具'})：${o.作用 || ''}`
+              )
+              .join('\n')
+          : ''
+    ),
+  ]);
+
+  return parts.join('\n\n');
 }
 
 /* ─── AI Generation Config ─── */
@@ -335,14 +499,21 @@ const SIDESTORIES_SYSTEM_PROMPT = `你是一个专业的小说支线故事设计
 // ── Zod schemas for AI generation ──────────────────────────────────────
 
 const sidestorySchema = z.record(z.string());
-const chapterAssocSchema = z.array(
-  z.object({ 章节序号: z.number(), 章节标题: z.string(), 要点: z.string() })
-);
 const eventFlowSchema = z.array(
   z
     .object({
       名称: z.string().optional(),
       序号: z.union([z.string(), z.number()]).optional(),
+      所属卷序号: z.union([z.string(), z.number()]).optional(),
+      欲望: z.string().optional(),
+      阻碍: z.string().optional(),
+      行动: z.string().optional(),
+      结果: z.string().optional(),
+      意外: z.string().optional(),
+      转折: z.string().optional(),
+      结局: z.string().optional(),
+      涉及角色: z.union([z.string(), z.array(z.string())]).optional(),
+      涉及支线: z.union([z.string(), z.array(z.string())]).optional(),
     })
     .passthrough()
 );
@@ -350,10 +521,7 @@ const eventFlowSchema = z.array(
 // ── Constants ──────────────────────────────────────────────────────
 
 const 七要素配置: {
-  key: keyof Pick<
-    事件数据,
-    '欲望' | '阻碍' | '行动' | '结果' | '意外' | '转折' | '结局'
-  >;
+  key: string;
   label: string;
   icon: string;
   color: string;
@@ -412,35 +580,14 @@ const 七要素配置: {
 
 // ── Sub-components ─────────────────────────────────────────────────
 
-/** Single element card with textarea and AI buttons */
+/** Single element card with textarea and AI button */
 const 要素卡片: React.FC<{
   配置: (typeof 七要素配置)[number];
-  数据: 要素数据;
-  章节范围: string;
-  展开关联: boolean;
-  on切换关联: () => void;
+  内容: string;
   onChange: (v: string) => void;
-  on关联变更: (idx: number, field: string, val: string) => void;
-  on添加关联: () => void;
-  on删除关联: (idx: number) => void;
   onAI完善: () => void;
-  onAI关联: () => void;
   aiGenerating: boolean;
-}> = ({
-  配置,
-  数据,
-  章节范围,
-  展开关联,
-  on切换关联,
-  onChange,
-  on关联变更,
-  on添加关联,
-  on删除关联,
-  onAI完善,
-  onAI关联,
-  aiGenerating,
-}) => {
-  const 关联数 = 数据.章节关联?.length || 0;
+}> = ({ 配置, 内容, onChange, onAI完善, aiGenerating }) => {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
@@ -467,123 +614,21 @@ const 要素卡片: React.FC<{
               className={`text-xs ri-magic-line text-amber-400 ${aiGenerating ? 'animate-pulse' : ''}`}
             />
           </button>
-          <button
-            className="flex items-center justify-center w-6 h-6 transition-colors rounded-md cursor-pointer hover:bg-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="AI智能关联章节"
-            onClick={onAI关联}
-            disabled={aiGenerating}
-          >
-            <i
-              className={`text-xs text-blue-400 ri-links-line ${aiGenerating ? 'animate-pulse' : ''}`}
-            />
-          </button>
         </div>
       </div>
 
       {/* Textarea with highlight layer */}
       <div className="relative 高亮编辑器容器 bg-[var(--bg-dark)] rounded-xl">
         <div className="高亮层 absolute top-0 left-0 right-0 bottom-0 rounded-xl px-4 py-3 text-[14px] leading-relaxed pointer-events-none overflow-hidden whitespace-pre-wrap break-words border border-transparent">
-          {数据.内容}
+          {内容}
         </div>
         <textarea
           className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded-xl px-4 py-3 text-[14px] resize-y focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20 transition-[border,box-shadow] leading-relaxed min-h-[56px] relative z-[2] 实体高亮透明"
           rows={2}
           placeholder={配置.placeholder}
-          value={数据.内容}
+          value={内容}
           onChange={e => onChange(e.target.value)}
         />
-      </div>
-
-      {/* Chapter association */}
-      <div className="要素关联编辑器 mt-2">
-        <div className="关联区块 rounded-lg border border-cyan-500/15 bg-cyan-500/[0.03] overflow-hidden">
-          <div
-            className="flex items-center justify-between px-3 py-2 cursor-pointer select-none hover:bg-cyan-500/[0.05] transition-colors"
-            onClick={on切换关联}
-          >
-            <span className="text-[12px] text-cyan-400/80 flex items-center gap-1.5 font-medium">
-              <i className="ri-git-commit-line text-cyan-400" /> 关联章节{' '}
-              {关联数 > 0 ? (
-                <span className="text-[10px] bg-cyan-500/15 text-cyan-400 px-1.5 py-0.5 rounded-full font-bold">
-                  {关联数}
-                </span>
-              ) : null}
-            </span>
-            <div className="flex items-center gap-1">
-              <button
-                className="flex items-center justify-center w-5 h-5 transition-colors rounded cursor-pointer hover:bg-cyan-500/20"
-                title="添加章节关联"
-                onClick={e => {
-                  e.stopPropagation();
-                  on添加关联();
-                }}
-              >
-                <i className="text-xs ri-add-line text-cyan-400" />
-              </button>
-              <i
-                className={`text-xs transition-transform duration-200 text-cyan-400/50 ri-arrow-down-s-line ${展开关联 ? 'rotate-180' : ''}`}
-              />
-            </div>
-          </div>
-
-          {展开关联 && (
-            <div className="border-t border-cyan-500/10">
-              <div className="px-2.5 py-1.5 text-[10px] text-[var(--text-secondary)]/60 flex items-center gap-1 bg-cyan-500/[0.02]">
-                <i className="ri-information-line text-cyan-400/40" />{' '}
-                当前幕章节范围：第{章节范围}章
-              </div>
-              {关联数 > 0 ? (
-                <div className="p-2 space-y-1.5">
-                  {数据.章节关联.map((关联, idx) => (
-                    <div
-                      key={idx}
-                      className="rounded-lg border border-cyan-500/10 bg-[var(--bg-darker)]/60 overflow-hidden group/bind hover:border-cyan-500/25 transition-colors"
-                    >
-                      <div className="flex items-center gap-2 px-2.5 py-1.5">
-                        <div className="flex items-center justify-center w-4 h-4 rounded shrink-0 bg-cyan-500/15">
-                          <span className="text-[8px] font-bold text-cyan-400">
-                            {关联.章节序号}
-                          </span>
-                        </div>
-                        <span className="text-[12px] font-medium flex-1 truncate text-cyan-300/90">
-                          {关联.章节标题}
-                        </span>
-                        <button
-                          className="flex items-center justify-center w-4 h-4 transition-colors rounded opacity-0 cursor-pointer hover:bg-red-500/20 group-hover/bind:opacity-100"
-                          title="移除关联"
-                          onClick={() => on删除关联(idx)}
-                        >
-                          <i className="ri-close-line text-[10px] text-red-400" />
-                        </button>
-                      </div>
-                      <div className="px-2.5 pb-2">
-                        <div className="relative 关联高亮容器 bg-[var(--bg-darker)] rounded-md">
-                          <div className="关联高亮层 absolute top-0 left-0 right-0 bottom-0 rounded-md px-2.5 py-1.5 text-[12px] leading-relaxed pointer-events-none overflow-hidden whitespace-pre-wrap break-words border border-transparent">
-                            {关联.要点}
-                          </div>
-                          <textarea
-                            className="w-full bg-[var(--bg-darker)] border border-cyan-500/12 rounded-md px-2.5 py-1.5 text-[12px] resize-y focus:outline-none transition-[border,box-shadow] leading-relaxed min-h-[32px] relative z-[2] 关联实体高亮透明"
-                            rows={1}
-                            placeholder="该要素在本章的具体实施要点..."
-                            value={关联.要点}
-                            onChange={e =>
-                              on关联变更(idx, '要点', e.target.value)
-                            }
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-[11px] text-cyan-400/30 text-center py-3">
-                  <i className="block mb-1 text-base ri-link-unlink" />{' '}
-                  暂无关联章节
-                </div>
-              )}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
@@ -597,9 +642,8 @@ const 事件详情面板: React.FC<{
   onSave: (updated: 事件数据) => void;
   onDelete: (id: number) => void;
   projectId: number | null;
-}> = ({ 事件, 当前卷, onClose, onSave, onDelete, projectId }) => {
+}> = ({ 事件, 当前卷: _当前卷, onClose, onSave, onDelete, projectId }) => {
   const [form, setForm] = useState<事件数据>({ ...事件 });
-  const [展开关联, set展开关联] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
@@ -610,99 +654,33 @@ const 事件详情面板: React.FC<{
     projectId,
   });
 
-  const 章节范围 = 当前卷 ? `${当前卷.起始章}-${当前卷.结束章}` : '1-96';
-
   const handleFieldChange = useCallback(
-    (field: keyof 事件数据, value: string) => {
+    (field: keyof 事件数据, value: string | number | string[]) => {
       setForm(prev => ({ ...prev, [field]: value }));
       setSaved(false);
     },
     []
   );
 
-  const handle要素Change = useCallback((key: string, value: string) => {
-    setForm(prev => ({
-      ...prev,
-      [key]: { ...(prev as any)[key], 内容: value },
-    }));
-    setSaved(false);
-  }, []);
-
-  const handle关联变更 = useCallback(
-    (要素key: string, idx: number, field: string, val: string) => {
-      setForm(prev => {
-        const 要素 = { ...(prev as any)[要素key] } as 要素数据;
-        const 新关联 = [...要素.章节关联];
-        新关联[idx] = { ...新关联[idx], [field]: val };
-        return { ...prev, [要素key]: { ...要素, 章节关联: 新关联 } };
-      });
-      setSaved(false);
-    },
-    []
-  );
-
-  const handle添加关联 = useCallback((要素key: string) => {
-    setForm(prev => {
-      const 要素 = { ...(prev as any)[要素key] } as 要素数据;
-      return {
-        ...prev,
-        [要素key]: {
-          ...要素,
-          章节关联: [
-            ...(要素.章节关联 || []),
-            { 章节序号: 1, 章节标题: '新章节', 要点: '' },
-          ],
-        },
-      };
-    });
-    setSaved(false);
-  }, []);
-
-  const handle删除关联 = useCallback((要素key: string, idx: number) => {
-    setForm(prev => {
-      const 要素 = { ...(prev as any)[要素key] } as 要素数据;
-      const 新关联 = 要素.章节关联.filter((_, i) => i !== idx);
-      return { ...prev, [要素key]: { ...要素, 章节关联: 新关联 } };
-    });
-    setSaved(false);
-  }, []);
-
-  const toggle关联 = useCallback((要素key: string) => {
-    set展开关联(prev => ({ ...prev, [要素key]: !prev[要素key] }));
-  }, []);
-
   const handleAI完善 = useCallback(
     async (要素key: string) => {
       if (aiGenerating) return;
       setAiGenerating(true);
       setAiTarget(要素key);
-      const 要素 = (form as any)[要素key] as 要素数据;
-      const 当前内容 = 要素.内容;
+      const 当前内容 = (form as any)[要素key] as string;
       const 要素名 = 七要素配置.find(c => c.key === 要素key)?.label ?? 要素key;
-      const prompt = `事件名称：${事件.名称}\n当前${要素名}内容：${当前内容 || '无'}\n\n请完善此事件的${要素名}要素描述，生成更详细的内容。直接输出文本描述，不要JSON格式。`;
+      const prompt = `事件名称：${事件.名称}\n当前${要素名}内容：${当前内容 || '无'}\n\n请完善此事件的${要素名}要素描述，生成200-400字的剧情叙事描写，有画面感和细节感。直接输出文本描述，不要JSON格式。`;
       const messages = [
         {
           role: 'system',
           content:
-            '你是一个专业的小说创作助手。请完善给定的事件要素描述。直接输出文本即可。',
+            '你是一个专业的小说创作助手。请完善给定的事件要素描述，生成200-400字的剧情叙事。直接输出文本即可。',
         },
         { role: 'user', content: prompt },
       ];
       const text = await aiGenerate(messages);
       if (text) {
-        setForm(prev => {
-          const updated = {
-            ...prev,
-            [要素key]: { ...(prev as any)[要素key], 内容: text },
-          };
-          if (projectId) {
-            saveVersion('sidestories', projectId, {
-              描述: 'AI完善要素',
-              内容: updated,
-            }).catch(() => {});
-          }
-          return updated;
-        });
+        setForm(prev => ({ ...prev, [要素key]: text }));
         setSaved(false);
       }
       setAiGenerating(false);
@@ -711,122 +689,9 @@ const 事件详情面板: React.FC<{
     [aiGenerating, form, 事件, aiGenerate, projectId]
   );
 
-  const handleAI关联 = useCallback(
-    async (要素key: string) => {
-      if (aiGenerating) return;
-      setAiGenerating(true);
-      setAiTarget(要素key);
-      const 要素 = (form as any)[要素key] as 要素数据;
-      const 要素名 = 七要素配置.find(c => c.key === 要素key)?.label ?? 要素key;
-      const prompt = `事件名称：${事件.名称}\n${要素名}内容：${要素.内容 || '无'}\n当前章节范围：第${章节范围}章\n\n请推荐与该要素关联的章节。请用管道格式输出，每个关联用 --- 分隔。每行格式：章节序号|数字\n章节标题|标题\n要点|描述`;
-      const messages = [
-        {
-          role: 'system',
-          content: buildChapterAssocSystemPrompt(),
-        },
-        { role: 'user', content: prompt },
-      ];
-      const gvResult = await generateValidated({
-        schema: chapterAssocSchema,
-        generate: async () => aiGenerate(messages),
-        parseResponse: text => parseChapterAssocResponse(text),
-        maxRetries: 3,
-      });
-      if (gvResult) {
-        const data = gvResult.data as Array<{
-          章节序号: number;
-          章节标题: string;
-          要点: string;
-        }>;
-        setForm(prev => {
-          const 要素 = { ...(prev as any)[要素key] } as 要素数据;
-          const updated = {
-            ...prev,
-            [要素key]: {
-              ...要素,
-              章节关联: [...(要素.章节关联 || []), ...data],
-            },
-          };
-          if (projectId) {
-            saveVersion('sidestories', projectId, {
-              描述: 'AI关联章节',
-              内容: updated,
-            }).catch(() => {});
-          }
-          return updated;
-        });
-        set展开关联(prev => ({ ...prev, [要素key]: true }));
-        setSaved(false);
-      }
-      setAiGenerating(false);
-      setAiTarget(null);
-    },
-    [aiGenerating, 事件, 章节范围, aiGenerate, projectId]
-  );
-
-  const handleAI批量关联 = useCallback(async () => {
-    if (aiGenerating) return;
-    setAiGenerating(true);
-    setAiTarget('__batch__');
-    const prompt = `事件名称：${事件.名称}\n当前章节范围：第${章节范围}章\n\n请为该事件的所有七要素(欲望、阻碍、行动、结果、意外、转折、结局)分别推荐关联章节。输出JSON对象，key为要素名称，value为关联数组：{"欲望":[{"章节序号":1,"章节标题":"标题","要点":"要点"}],...}`;
-    const messages = [
-      {
-        role: 'system',
-        content:
-          buildChapterAssocSystemPrompt() +
-          '\n\n批量模式：输出JSON对象，key为要素名称(欲望/阻碍/行动/结果/意外/转折/结局)，value为关联数组。',
-      },
-      { role: 'user', content: prompt },
-    ];
-    const text = await aiGenerate(messages);
-    if (text) {
-      // Try JSON format first for batch (more structured), then fallback
-      const { data } =
-        parseAIJSON<
-          Record<
-            string,
-            Array<{ 章节序号: number; 章节标题: string; 要点: string }>
-          >
-        >(text);
-      if (data) {
-        setForm(prev => {
-          const updated = { ...prev };
-          七要素配置.forEach(配置 => {
-            const 要素 = { ...(updated as any)[配置.key] } as 要素数据;
-            const 关联 = data[配置.key] || data[配置.label];
-            if (要素.章节关联.length === 0 && 关联 && Array.isArray(关联)) {
-              (updated as any)[配置.key] = { ...要素, 章节关联: 关联 };
-            }
-          });
-          if (projectId) {
-            saveVersion('sidestories', projectId, {
-              描述: 'AI批量关联',
-              内容: updated,
-            }).catch(() => {});
-          }
-          return updated;
-        });
-        const allExpanded: Record<string, boolean> = {};
-        七要素配置.forEach(配置 => {
-          allExpanded[配置.key] = true;
-        });
-        set展开关联(allExpanded);
-        setSaved(false);
-      }
-    }
-    setAiGenerating(false);
-    setAiTarget(null);
-  }, [aiGenerating, 事件, 章节范围, aiGenerate, projectId]);
-
   const handleSave = () => {
     setSaving(true);
     onSave(form);
-    if (projectId) {
-      saveVersion('sidestories', projectId, {
-        描述: '保存支线',
-        内容: form,
-      }).catch(() => {});
-    }
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -879,50 +744,73 @@ const 事件详情面板: React.FC<{
             />
           </div>
 
+          {/* 所属卷序号 */}
+          <div>
+            <label className="text-[13px] text-[var(--text-secondary)] mb-2 block font-semibold tracking-wide">
+              所属卷序号
+            </label>
+            <input
+              className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded-xl px-4 py-3 text-[14px] focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20 transition-all"
+              type="number"
+              min={1}
+              placeholder="卷序号"
+              value={form.所属卷序号}
+              onChange={e =>
+                handleFieldChange(
+                  '所属卷序号',
+                  parseInt(e.target.value, 10) || 1
+                )
+              }
+            />
+          </div>
+
           {/* 七要素 */}
           <div className="space-y-4">
-            <h4 className="text-[14px] font-bold text-[var(--text)] flex items-center justify-between">
-              <span className="flex items-center gap-2">
-                <i className="text-purple-400 ri-list-ordered" /> 事件七要素
-              </span>
-              <button
-                className="px-2.5 py-1 text-[11px] bg-gradient-to-r from-purple-500/15 to-blue-500/15 text-purple-400 rounded-lg hover:from-purple-500/25 hover:to-blue-500/25 transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                title="AI一键关联所有要素到章节"
-                onClick={handleAI批量关联}
-                disabled={aiGenerating}
-              >
-                {aiTarget === '__batch__' ? (
-                  <i className="ri-loader-4-line animate-spin text-[11px]" />
-                ) : (
-                  <i className="ri-links-fill text-[11px]" />
-                )}{' '}
-                批量关联
-              </button>
+            <h4 className="text-[14px] font-bold text-[var(--text)] flex items-center gap-2">
+              <i className="text-purple-400 ri-list-ordered" /> 事件七要素
             </h4>
             <div className="space-y-4">
               {七要素配置.map(配置 => {
-                const 数据 = (form as any)[配置.key] as 要素数据;
+                const 内容 = ((form as any)[配置.key] as string) || '';
                 return (
                   <要素卡片
                     key={配置.key}
                     配置={配置}
-                    数据={数据}
-                    章节范围={章节范围}
-                    展开关联={!!展开关联[配置.key]}
-                    on切换关联={() => toggle关联(配置.key)}
-                    onChange={v => handle要素Change(配置.key, v)}
-                    on关联变更={(idx, field, val) =>
-                      handle关联变更(配置.key, idx, field, val)
+                    内容={内容}
+                    onChange={v =>
+                      handleFieldChange(配置.key as keyof 事件数据, v)
                     }
-                    on添加关联={() => handle添加关联(配置.key)}
-                    on删除关联={idx => handle删除关联(配置.key, idx)}
                     onAI完善={() => handleAI完善(配置.key)}
-                    onAI关联={() => handleAI关联(配置.key)}
                     aiGenerating={aiGenerating && aiTarget === 配置.key}
                   />
                 );
               })}
             </div>
+          </div>
+
+          {/* 涉及角色 */}
+          <div>
+            <label className="text-[13px] text-[var(--text-secondary)] mb-2 block font-semibold tracking-wide">
+              涉及角色
+            </label>
+            <input
+              className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded-xl px-4 py-3 text-[14px] focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20 transition-all"
+              placeholder="角色名用英文逗号分隔，如: 林玄,张三"
+              value={
+                Array.isArray(form.涉及角色)
+                  ? form.涉及角色.join(', ')
+                  : form.涉及角色 || ''
+              }
+              onChange={e =>
+                handleFieldChange(
+                  '涉及角色',
+                  e.target.value
+                    .split(',')
+                    .map((s: string) => s.trim())
+                    .filter(Boolean)
+                )
+              }
+            />
           </div>
 
           {/* 涉及支线 */}
@@ -932,29 +820,22 @@ const 事件详情面板: React.FC<{
             </label>
             <input
               className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded-xl px-4 py-3 text-[14px] focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20 transition-all"
-              placeholder="多个支线用逗号分隔"
-              value={form.涉及支线 || ''}
-              onChange={e => handleFieldChange('涉及支线', e.target.value)}
+              placeholder="支线名用英文逗号分隔"
+              value={
+                Array.isArray(form.涉及支线)
+                  ? form.涉及支线.join(', ')
+                  : form.涉及支线 || ''
+              }
+              onChange={e =>
+                handleFieldChange(
+                  '涉及支线',
+                  e.target.value
+                    .split(',')
+                    .map((s: string) => s.trim())
+                    .filter(Boolean)
+                )
+              }
             />
-          </div>
-
-          {/* 暗线伏笔 */}
-          <div>
-            <label className="text-[13px] text-[var(--text-secondary)] mb-2 block font-semibold tracking-wide">
-              暗线伏笔
-            </label>
-            <div className="relative 高亮编辑器容器 bg-[var(--bg-dark)] rounded-xl">
-              <div className="高亮层 absolute top-0 left-0 right-0 bottom-0 rounded-xl px-4 py-3 text-[14px] leading-relaxed pointer-events-none overflow-hidden whitespace-pre-wrap break-words border border-transparent">
-                {form.暗线伏笔}
-              </div>
-              <textarea
-                className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded-xl px-4 py-3 text-[14px] resize-y focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20 transition-[border,box-shadow] leading-relaxed min-h-[56px] relative z-[2] 实体高亮透明"
-                rows={2}
-                placeholder="暗线伏笔备注"
-                value={form.暗线伏笔 || ''}
-                onChange={e => handleFieldChange('暗线伏笔', e.target.value)}
-              />
-            </div>
           </div>
         </div>
 
@@ -995,7 +876,15 @@ const 幕控制卡片: React.FC<{
   onToggle: (卷id: number) => void;
   onSelect: (事件: 事件数据) => void;
   onAdd: (卷id: number) => void;
-}> = ({ 卷, 事件列表, 展开的卷, 选中事件id, onToggle, onSelect, onAdd }) => {
+}> = ({
+  卷,
+  事件列表,
+  展开的卷,
+  选中事件id: _选中事件id,
+  onToggle,
+  onSelect: _onSelect,
+  onAdd: _onAdd,
+}) => {
   const 已展开 = 展开的卷.has(卷.id);
   const 事件数 = 事件列表.length;
   const 总章数 = 卷.结束章 - 卷.起始章 + 1;
@@ -1069,8 +958,8 @@ const AI生成进度弹窗: React.FC<{
   卷列表: 卷数据[];
   onCancel: () => void;
 }> = ({ 卷列表, onCancel }) => {
-  const [当前幕idx, set当前幕idx] = useState(0);
-  const [ai输出, setAi输出] = useState('');
+  const [当前幕idx] = useState(0);
+  const [_ai输出] = useState('');
   const 总幕数 = 卷列表.length;
   const 进度 = ((当前幕idx + 1) / 总幕数) * 100;
 
@@ -1108,11 +997,11 @@ const AI生成进度弹窗: React.FC<{
           <div className="px-3 py-1.5 bg-[var(--bg-card)] text-xs text-[var(--text-secondary)] border-b border-[var(--border)] flex items-center gap-1.5 shrink-0">
             <i className="text-purple-400 ri-quill-pen-line" /> AI 实时输出{' '}
             <span className="ml-auto text-[10px] text-[var(--text-tertiary)]">
-              {ai输出.length} 字符
+              {_ai输出.length} 字符
             </span>
           </div>
           <div className="flex-1 overflow-y-auto p-3 text-xs leading-relaxed text-[var(--text-secondary)] whitespace-pre-wrap font-mono bg-[var(--bg-card)]/30">
-            {ai输出 || '等待AI输出...'}
+            {_ai输出 || '等待AI输出...'}
           </div>
         </div>
         <div className="flex justify-end mt-4 shrink-0">
@@ -1261,34 +1150,16 @@ const demo事件列表: 事件数据[] = [
     id: 1,
     序号: 1,
     名称: '宗门来人了',
-    卷id: 1,
-    欲望: {
-      内容: '霸占',
-      章节关联: [
-        { 章节序号: 1, 章节标题: '第一章 善良的人', 要点: '杀死守山人' },
-      ],
-    },
-    阻碍: {
-      内容: '霸占资源',
-      章节关联: [{ 章节序号: 1, 章节标题: '第1章 新章节', 要点: '复仇' }],
-    },
-    行动: {
-      内容: '坏人',
-      章节关联: [
-        { 章节序号: 1, 章节标题: '第一章 善良的人', 要点: '赶走坏人' },
-      ],
-    },
-    结果: {
-      内容: '宗门',
-      章节关联: [
-        { 章节序号: 1, 章节标题: '第1章 新章节', 要点: '宗门派更厉害的人来了' },
-      ],
-    },
-    意外: { 内容: '', 章节关联: [] },
-    转折: { 内容: '', 章节关联: [] },
-    结局: { 内容: '', 章节关联: [] },
-    涉及支线: '',
-    暗线伏笔: '大护法',
+    所属卷序号: 1,
+    欲望: '霸占',
+    阻碍: '霸占资源',
+    行动: '坏人',
+    结果: '宗门派更厉害的人来了',
+    意外: '',
+    转折: '',
+    结局: '',
+    涉及角色: [],
+    涉及支线: [],
   },
 ];
 
@@ -1310,9 +1181,8 @@ export const SideStoriesPanel: React.FC<Props> = ({
   const [选中事件, set选中事件] = useState<事件数据 | null>(null);
   const [显示AI确认, set显示AI确认] = useState(false);
   const [显示AI进度, set显示AI进度] = useState(false);
-  const [batchAiGenerating, setBatchAiGenerating] = useState(false);
 
-  const { generating: aiGenerating, generate: aiGenerate } = useAIGenerate({
+  const { generate: aiGenerate } = useAIGenerate({
     module: 'sidestories',
     projectId,
   });
@@ -1334,17 +1204,6 @@ export const SideStoriesPanel: React.FC<Props> = ({
     },
     [flatData]
   );
-
-   
-  const fieldGen = useAIFieldGenerate({
-    module: 'sidestories',
-    projectId,
-    data: flatData,
-    setData: setFlatData,
-    fetchSystemPrompt,
-    buildExistingStr,
-    schema: sidestorySchema,
-  });
 
   const fullGen = useAIFullGenerate({
     module: 'sidestories',
@@ -1403,22 +1262,25 @@ export const SideStoriesPanel: React.FC<Props> = ({
     };
   }, [dragging, leftOffset]);
 
-  // Filtered events
+  // Filtered events — use 所属卷序号 mapped to 卷.id
   const filteredEvents = 事件列表.filter(e => {
-    if (当前卷id && e.卷id !== 当前卷id) return false;
+    if (当前卷id) {
+      const target卷 = 卷列表.find(v => v.id === 当前卷id);
+      if (target卷 && e.所属卷序号 !== target卷.序号) return false;
+    }
     return true;
   });
 
-  // Group events by volume
+  // Group events by volume (via 所属卷序号 → 卷.id mapping)
   const 按卷分组 = (
     当前卷id ? [卷列表.find(v => v.id === 当前卷id)!].filter(Boolean) : 卷列表
   ).map(卷 => ({
     卷,
-    事件: filteredEvents.filter(e => e.卷id === 卷.id),
+    事件: filteredEvents.filter(e => e.所属卷序号 === 卷.序号),
   }));
 
   const 总事件数 = filteredEvents.length;
-  const 完成数 = filteredEvents.filter(e => e.结局?.内容).length;
+  const 完成数 = filteredEvents.filter(e => !!e.结局).length;
 
   // Handlers
   const toggle卷展开 = useCallback((卷id: number) => {
@@ -1430,175 +1292,201 @@ export const SideStoriesPanel: React.FC<Props> = ({
     });
   }, []);
 
-  const handle添加事件 = useCallback(() => {
+  const handle添加事件 = useCallback(async () => {
+    if (!projectId) return;
     const 目标卷id = 当前卷id || (卷列表[0]?.id ?? 0);
+    const 目标卷 = 卷列表.find(v => v.id === 目标卷id);
+    const payload = {
+      序号:
+        (事件列表.filter(e => e.所属卷序号 === (目标卷?.序号 || 1)).length ||
+          0) + 1,
+      名称: '新节点',
+      所属卷序号: 目标卷?.序号 || 1,
+      欲望: '',
+      阻碍: '',
+      行动: '',
+      结果: '',
+      意外: '',
+      转折: '',
+      结局: '',
+      涉及角色: [],
+      涉及支线: [],
+    };
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/event-flow/project/${projectId}/event`,
+        {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload),
+        }
+      );
+      const result = await res.json();
+      if (result.success && result.data) {
+        const 新事件 = result.data as 事件数据;
+        set事件列表(prev => [...(prev || []), 新事件]);
+        if (!展开的卷.has(目标卷id)) {
+          set展开的卷(prev => new Set(prev).add(目标卷id));
+        }
+        set选中事件(新事件);
+        return;
+      }
+    } catch {}
+    // Fallback: local only
     const 新事件: 事件数据 = {
       id: Date.now(),
-      序号: (事件列表.filter(e => e.卷id === 目标卷id).length || 0) + 1,
-      名称: '新节点',
-      卷id: 目标卷id,
-      欲望: { 内容: '', 章节关联: [] },
-      阻碍: { 内容: '', 章节关联: [] },
-      行动: { 内容: '', 章节关联: [] },
-      结果: { 内容: '', 章节关联: [] },
-      意外: { 内容: '', 章节关联: [] },
-      转折: { 内容: '', 章节关联: [] },
-      结局: { 内容: '', 章节关联: [] },
-      涉及支线: '',
-      暗线伏笔: '',
+      序号: payload.序号,
+      名称: payload.名称,
+      所属卷序号: payload.所属卷序号,
+      欲望: '',
+      阻碍: '',
+      行动: '',
+      结果: '',
+      意外: '',
+      转折: '',
+      结局: '',
+      涉及角色: [],
+      涉及支线: [],
     };
     set事件列表([...事件列表, 新事件]);
     if (!展开的卷.has(目标卷id)) {
       set展开的卷(prev => new Set(prev).add(目标卷id));
     }
     set选中事件(新事件);
-  }, [当前卷id, 卷列表, 事件列表, 展开的卷, set事件列表]);
+  }, [projectId, 当前卷id, 卷列表, 事件列表, 展开的卷, set事件列表]);
 
   const handleSave事件 = useCallback(
-    (updated: 事件数据) => {
+    async (updated: 事件数据) => {
+      if (!projectId) return;
+      try {
+        await fetch(
+          `${API_BASE}/api/event-flow/project/${projectId}/event/${updated.id}`,
+          {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(updated),
+          }
+        );
+      } catch {}
       set事件列表(prev =>
         (prev || []).map(e => (e.id === updated.id ? updated : e))
       );
     },
-    [set事件列表]
+    [projectId, set事件列表]
   );
 
   const handleDelete事件 = useCallback(
-    (id: number) => {
+    async (id: number) => {
+      if (!projectId) return;
+      try {
+        await fetch(
+          `${API_BASE}/api/event-flow/project/${projectId}/event/${id}`,
+          {
+            method: 'DELETE',
+            headers: getAuthHeaders(),
+          }
+        );
+      } catch {}
       set事件列表(prev => (prev || []).filter(e => e.id !== id));
-      set选中事件(null);
+      if (选中事件?.id === id) set选中事件(null);
     },
-    [set事件列表]
+    [projectId, 选中事件, set事件列表]
   );
 
   const handleStartGenerate = useCallback(async () => {
+    if (!projectId) return;
     set显示AI确认(false);
     set显示AI进度(true);
+
+    // Fetch context from all 12 modules
+    const 上下文摘要 = await fetchEventFlowContext(projectId);
+
+    const 卷标题映射: Record<number, string> = {};
+    卷列表.forEach(v => {
+      卷标题映射[v.序号] = v.标题;
+    });
+
     for (const 卷 of 卷列表) {
-      const prompt = `为第${卷.序号}幕「${卷.标题}」(章节范围：${卷.章节范围})生成2个主线事件流。每个事件包含七要素：欲望、阻碍、行动、结果、意外、转折、结局。请用管道格式输出，事件之间用 === 分隔。每行格式：字段名|内容。例如：\n名称|事件名\n序号|1\n卷id|${卷.id}\n欲望|描述\n阻碍|描述\n行动|描述\n结果|描述\n意外|描述\n转折|描述\n结局|描述\n===\n名称|事件名2\n...`;
+      const systemPrompt = buildEventFlowSystemPrompt({
+        事件条数: 2,
+        开始卷序号: 卷.序号,
+        结束卷序号: 卷.序号,
+        卷标题映射,
+        上下文摘要,
+      });
+
+      let userPrompt = `请为「${卷.标题}」（卷序号${卷.序号}）设计事件流。
+**必须严格生成 2 条事件**，每个事件包含完整的七要素。
+【有效卷范围】字段1「所属卷序号」必须恒等于 ${卷.序号}，本次只为第${卷.序号}卷生成事件，绝对禁止出现 ${卷.序号} 以外的任何卷序号。`;
+
+      if (上下文摘要) {
+        userPrompt = `${上下文摘要}\n\n${userPrompt}`;
+      }
+
+      // Add 情节脉络 constraint (matches Vue line 181806-181833)
+      if (卷.标签) {
+        userPrompt += `\n\n【第${卷.序号}卷情节脉络约束】\n幕名称：${卷.标题}\n描述：${卷.标签}`;
+      }
+
       const messages = [
-        {
-          role: 'system',
-          content: buildEventFlowSystemPrompt(),
-        },
-        { role: 'user', content: prompt },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
       ];
+
       const gvResult = await generateValidated({
         schema: eventFlowSchema,
         generate: async () => aiGenerate(messages),
         parseResponse: text => parseEventFlowResponse(text),
         maxRetries: 3,
       });
+
       if (!gvResult) continue;
       const parsed = gvResult.data as any[];
-      if (parsed && Array.isArray(parsed)) {
-        const 新事件 = parsed.map((evt, i) => ({
-          id: Date.now() + i + Math.random(),
-          序号: evt.序号 || i + 1,
-          名称: evt.名称 || `新事件${i + 1}`,
-          卷id: 卷.id,
-          欲望: evt.欲望 || { 内容: '', 章节关联: [] },
-          阻碍: evt.阻碍 || { 内容: '', 章节关联: [] },
-          行动: evt.行动 || { 内容: '', 章节关联: [] },
-          结果: evt.结果 || { 内容: '', 章节关联: [] },
-          意外: evt.意外 || { 内容: '', 章节关联: [] },
-          转折: evt.转折 || { 内容: '', 章节关联: [] },
-          结局: evt.结局 || { 内容: '', 章节关联: [] },
-          涉及支线: evt.涉及支线 || '',
-          暗线伏笔: evt.暗线伏笔 || '',
-        }));
-        set事件列表(prev => [...(prev || []), ...新事件]);
-      }
-    }
-    set显示AI进度(false);
-    if (projectId) {
-      saveVersion('sidestories', projectId, {
-        描述: 'AI生成事件流',
-        内容: 事件列表,
-      }).catch(() => {});
-    }
-  }, [aiGenerate, 卷列表, set事件列表, projectId, 事件列表]);
+      if (!parsed || !Array.isArray(parsed)) continue;
 
-  const handle一键关联所有事件 = useCallback(async () => {
-    if (batchAiGenerating) return;
-    setBatchAiGenerating(true);
-    const 有内容的事件 = 事件列表.filter(e => e.欲望?.内容 || e.行动?.内容);
-    if (有内容的事件.length === 0) {
-      setBatchAiGenerating(false);
-      return;
-    }
-    const prompt = `以下是需要关联章节的事件列表：\n${有内容的事件.map(e => `事件「${e.名称}」(卷id:${e.卷id}): 欲望=${e.欲望?.内容 || ''}, 行动=${e.行动?.内容 || ''}`).join('\n')}\n\n请为每个有内容但无章节关联的要素推荐关联章节。输出JSON数组，每个元素：{"事件名称":"名称","要素key":"欲望/阻碍/行动/结果/意外/转折/结局","章节关联":[{"章节序号":1,"章节标题":"标题","要点":"要点描述"}]}`;
-    const messages = [
-      {
-        role: 'system',
-        content:
-          buildChapterAssocSystemPrompt() +
-          '\n\n批量关联模式：输出JSON数组，每个元素包含事件名称、要素key和章节关联数组。',
-      },
-      { role: 'user', content: prompt },
-    ];
-    const gvResult = await generateValidated({
-      schema: z.array(
-        z.object({
-          事件名称: z.string(),
-          要素key: z.string(),
-          章节关联: z.array(
-            z.object({
-              章节序号: z.number(),
-              章节标题: z.string(),
-              要点: z.string(),
-            })
-          ),
-        })
-      ),
-      generate: async () => aiGenerate(messages),
-      parseResponse: text => {
-        const { data } = parseAIJSON<
-          Array<{
-            事件名称: string;
-            要素key: string;
-            章节关联: Array<{
-              章节序号: number;
-              章节标题: string;
-              要点: string;
-            }>;
-          }>
-        >(text);
-        return data ?? null;
-      },
-      maxRetries: 3,
-    });
-    if (gvResult) {
-      const data = gvResult.data;
-      set事件列表(prev =>
-        (prev || []).map(事件 => {
-          const updated = { ...事件 };
-          for (const assoc of data) {
-            if (
-              assoc.事件名称 === 事件.名称 &&
-              七要素配置.some(c => c.key === assoc.要素key)
-            ) {
-              const 要素 = { ...(updated as any)[assoc.要素key] } as 要素数据;
-              if (要素.章节关联.length === 0) {
-                (updated as any)[assoc.要素key] = {
-                  ...要素,
-                  章节关联: assoc.章节关联,
-                };
-              }
-            }
+      const 新事件 = parsed.map((evt, i) => ({
+        id: Date.now() + i + Math.random(),
+        序号: evt.序号 || i + 1,
+        名称: evt.名称 || `新事件${i + 1}`,
+        所属卷序号: evt.所属卷序号 || 卷.序号,
+        欲望: typeof evt.欲望 === 'string' ? evt.欲望 : evt.欲望?.内容 || '',
+        阻碍: typeof evt.阻碍 === 'string' ? evt.阻碍 : evt.阻碍?.内容 || '',
+        行动: typeof evt.行动 === 'string' ? evt.行动 : evt.行动?.内容 || '',
+        结果: typeof evt.结果 === 'string' ? evt.结果 : evt.结果?.内容 || '',
+        意外: typeof evt.意外 === 'string' ? evt.意外 : evt.意外?.内容 || '',
+        转折: typeof evt.转折 === 'string' ? evt.转折 : evt.转折?.内容 || '',
+        结局: typeof evt.结局 === 'string' ? evt.结局 : evt.结局?.内容 || '',
+        涉及角色: Array.isArray(evt.涉及角色)
+          ? evt.涉及角色
+          : ((evt.涉及角色 || '') as string)
+              .split(',')
+              .map((s: string) => s.trim())
+              .filter(Boolean),
+        涉及支线: Array.isArray(evt.涉及支线)
+          ? evt.涉及支线
+          : ((evt.涉及支线 || '') as string)
+              .split(',')
+              .map((s: string) => s.trim())
+              .filter(Boolean),
+      }));
+
+      // Adopt: batch-save to server
+      try {
+        await fetch(
+          `${API_BASE}/api/event-flow/project/${projectId}/batch-save`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(新事件),
           }
-          return updated;
-        })
-      );
+        );
+      } catch {}
+
+      set事件列表(prev => [...(prev || []), ...新事件]);
     }
-    setBatchAiGenerating(false);
-    if (projectId) {
-      saveVersion('sidestories', projectId, {
-        描述: 'AI一键关联所有事件',
-        内容: 事件列表,
-      }).catch(() => {});
-    }
-  }, [batchAiGenerating, 事件列表, aiGenerate, set事件列表, projectId]);
+
+    set显示AI进度(false);
+  }, [aiGenerate, projectId, 卷列表, set事件列表, 事件列表]);
 
   return createPortal(
     <>
@@ -1708,7 +1596,9 @@ export const SideStoriesPanel: React.FC<Props> = ({
                     <幕控制卡片
                       key={卷.id}
                       卷={卷}
-                      事件列表={filteredEvents.filter(e => e.卷id === 卷.id)}
+                      事件列表={filteredEvents.filter(
+                        e => e.所属卷序号 === 卷.序号
+                      )}
                       展开的卷={展开的卷}
                       选中事件id={选中事件?.id ?? null}
                       onToggle={toggle卷展开}
@@ -1721,24 +1611,6 @@ export const SideStoriesPanel: React.FC<Props> = ({
                   ))}
               </div>
             )}
-
-            {/* ── Toolbar ── */}
-            <div className="flex items-center gap-2 px-5 py-2 border-b border-[var(--border)] shrink-0 bg-[var(--bg-card)]/30">
-              <button
-                className="一键关联按钮 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] border border-[var(--border)] bg-[var(--bg-dark)] text-[var(--text-secondary)] hover:bg-purple-500/15 hover:border-purple-500/30 hover:text-purple-400 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-[var(--bg-dark)] disabled:hover:border-[var(--border)] disabled:hover:text-[var(--text-secondary)]"
-                onClick={handle一键关联所有事件}
-                disabled={batchAiGenerating}
-              >
-                {batchAiGenerating ? (
-                  <i className="ri-loader-4-line animate-spin" />
-                ) : (
-                  <i className="ri-magic-line" />
-                )}
-                <span>
-                  {batchAiGenerating ? 'AI关联中...' : '一键关联所有事件'}
-                </span>
-              </button>
-            </div>
 
             {/* ── Main content area ── */}
             {loading卷 || loading事件 ? (
@@ -1838,7 +1710,7 @@ export const SideStoriesPanel: React.FC<Props> = ({
                         {/* Event cards */}
                         {卷事件.map(事件 => {
                           const 是否选中 = 选中事件?.id === 事件.id;
-                          const 有要素 = 事件.欲望?.内容 || 事件.行动?.内容;
+                          const 有要素 = !!事件.欲望 || !!事件.行动;
                           return (
                             <div key={事件.id} className="ml-4 group">
                               <div

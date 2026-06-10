@@ -1,12 +1,14 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { z } from 'zod';
-import {
-  generateLLM,
-  generateValidated,
-  useSystemPrompt,
-} from './panel-shared';
-import { saveVersion } from '../useWorldApi';
+import { generateLLM, generateValidated } from './panel-shared';
+import { API_BASE, getAuthHeaders } from '../useWorldApi';
 
 interface Props {
   projectId: number | null;
@@ -23,44 +25,98 @@ const 货币类型样式: Record<string, string> = {
   特殊货币: 'bg-blue-500/20 text-blue-400',
 };
 
-/* Source-derived: currency item interface (源码 edit dialog fields) */
+/* Source-derived: currency item interface (源码 j() line 42109-42124, _e() line 42210-42242) */
 interface 货币数据 {
-  id: number;
+  id?: number;
   货币名称: string;
   货币类型: string;
   货币定义: string;
-  使用场景?: string;
-  特点?: string;
-  参考价值?: string;
-  兑换比例示例?: string;
-  获取方式?: string;
-  来源?: string;
-  溢价情况?: string;
+  使用场景: string;
+  特点: string;
+  参考价值: string;
+  获取方式: string;
+  来源: string;
+  溢价: string;
+  兑换比例示例: string;
 }
 
-/* ── AI prompt & parsers (source-derived pipe format) ── */
+/* ── AI prompt (源码 K() line 42145-42208) ── */
 
-function buildCurrencySystemPrompt(): string {
-  return `你是一位专业的小说货币体系设计师。请根据用户要求生成详细的货币体系设计。
+interface 世界观信息 {
+  世界名称?: string;
+  世界类型?: string;
+  势力格局?: string;
+  社会结构?: string;
+  时代背景?: string;
+  [key: string]: unknown;
+}
 
-输出格式要求（严格按管道符|分隔的行格式）：
-C|核心理念内容
+function buildCurrencyPrompt(
+  世界观: 世界观信息 | null,
+  已有货币名列表: string[] = []
+): string {
+  let 世界观背景 = '';
+  if (世界观 && Object.keys(世界观).length > 0) {
+    世界观背景 = `
+【世界观背景】
+世界名称：${世界观.世界名称 || '未设定'}
+世界类型：${世界观.世界类型 || '未设定'}
+势力格局：${世界观.势力格局 || '未设定'}
+社会结构：${世界观.社会结构 || '未设定'}
+时代背景：${世界观.时代背景 || '未设定'}`;
+  }
+
+  let 禁止重复 = '';
+  if (已有货币名列表.length > 0) {
+    const 显示列表 =
+      已有货币名列表.length > 50
+        ? [...已有货币名列表.slice(0, 50), `...(共${已有货币名列表.length}个)`]
+        : 已有货币名列表;
+    禁止重复 = `
+
+╔══════════════════════════════════════════════════════════════╗
+║  【绝对禁止重复】以下货币名称已被使用，生成任何重复名称将导致任务失败
+╚══════════════════════════════════════════════════════════════╝
+已存在的货币名称(${已有货币名列表.length}个)：
+${显示列表.join('、')}`;
+  }
+
+  return `你是一位专业的小说货币体系设计师，擅长构建完整的虚拟世界经济系统。${世界观背景}${禁止重复}
+
+当前任务：生成完整的货币体系设定
+
+【输出格式】（极简格式，节省token）
+C|核心理念描述
 M|货币名称|货币类型|货币定义
-I|其他信息内容
+I|其他补充信息
 
-规则：
-1. C行：以C|开头，后面直接写核心理念的文字内容，200字以上
-2. M行：以M|开头，格式为 M|货币名称|货币类型（基础货币/高级货币/特殊货币）|货币的定义描述
-3. I行：以I|开头，后面直接写其他补充信息的内容
-4. 每种货币一个M行，可包含使用场景、参考价值等信息在定义中
-5. 不要输出JSON，只输出上述管道格式
+【格式说明】
+- C: 核心理念（第1行，必填，10-60字）
+- M: 货币（每个货币一行，至少3-5个）
+  - 货币类型：基础货币/高级货币/特殊货币
+  - 货币定义：简洁描述（10-30字）
+- I: 其他信息（可选，如经济规律等）
 
-示例：
-C|这个世界以灵气为经济基础，灵石作为通用货币，蕴含可被修士吸收的灵气...
-M|下品灵石|基础货币|修仙界最基础的流通货币，蕴含微量灵气，散修日常交易使用
-M|中品灵石|高级货币|等价于100块下品灵石，中阶修士间的主要交易媒介
-M|造化晶|特殊货币|极为罕见的天地结晶，可用于突破瓶颈，无法用灵石衡量价值
-I|黑市交易通常溢价30%-50%，特殊货币在拍卖会上价格翻倍...`;
+【输出示例】
+C|以灵气为核心的修仙经济体系，灵石作为通用货币蕴含可被吸收的灵气
+M|下品灵石|基础货币|含微量灵气的初级货币
+M|中品灵石|高级货币|含中等灵气，100下品兑换1中品
+M|上品灵石|高级货币|含丰富灵气，100中品兑换1上品
+M|极品灵石|特殊货币|稀有高纯度灵石，宗门专用
+M|灵晶|特殊货币|灵气结晶，用于大宗交易
+I|黑市交易常用极品灵石，溢价10%
+
+【核心要求】
+1. 货币体系要符合世界观设定的逻辑
+2. 至少生成3-5种不同等级的货币
+3. 货币之间要有合理的兑换关系
+4. ⚠️ 货币名称绝对不能与已有货币重复
+
+【重要规则】
+1. 严格按格式输出，每行一个项
+2. C行必须在第一行
+3. 不要输出任何其他内容
+4. ⚠️ 在输出前，逐个检查每个货币名称是否与已有名称重复，确保不重复后再输出`;
 }
 
 interface CurrencyGenResult {
@@ -83,23 +139,31 @@ function parseCurrencyPipe(text: string): CurrencyGenResult | null {
       核心理念 = line.slice(2).trim();
     } else if (line.startsWith('M|')) {
       const parts = line.slice(2).split('|');
-      货币列表.push({
-        id: Date.now() + 货币列表.length,
-        货币名称: (parts[0] || '').trim(),
-        货币类型: (parts[1] || '基础货币').trim(),
-        货币定义: (parts[2] || '').trim(),
-      });
+      if (parts.length >= 3) {
+        货币列表.push({
+          货币名称: (parts[0] || '').trim(),
+          货币类型: (parts[1] || '基础货币').trim(),
+          货币定义: parts.slice(2).join('|').trim(),
+          使用场景: '',
+          特点: '',
+          参考价值: '',
+          获取方式: '',
+          来源: '',
+          溢价: '',
+          兑换比例示例: '',
+        });
+      }
     } else if (line.startsWith('I|')) {
       其他信息 = line.slice(2).trim();
     }
   }
 
   if (!核心理念 && !其他信息 && 货币列表.length === 0) return null;
-  const result: CurrencyGenResult = {};
-  if (核心理念) result.核心理念 = 核心理念;
-  if (其他信息) result.其他信息 = 其他信息;
-  if (货币列表.length > 0) result.货币列表 = 货币列表;
-  return result;
+  return {
+    核心理念: 核心理念 || undefined,
+    其他信息: 其他信息 || undefined,
+    货币列表: 货币列表.length > 0 ? 货币列表 : undefined,
+  };
 }
 
 function parseCurrencyResponse(text: string): CurrencyGenResult | null {
@@ -122,7 +186,72 @@ function parseCurrencyResponse(text: string): CurrencyGenResult | null {
   return null;
 }
 
-const CurrencySchema = z.record(z.any());
+const CurrencyItemSchema = z.object({
+  货币名称: z.string(),
+  货币类型: z.string(),
+  货币定义: z.string(),
+  使用场景: z.string().optional().default(''),
+  特点: z.string().optional().default(''),
+  参考价值: z.string().optional().default(''),
+  获取方式: z.string().optional().default(''),
+  来源: z.string().optional().default(''),
+  溢价: z.string().optional().default(''),
+  兑换比例示例: z.string().optional().default(''),
+});
+
+const CurrencySchema = z.object({
+  核心理念: z.string().optional(),
+  其他信息: z.string().optional(),
+  货币列表: z.array(CurrencyItemSchema).optional(),
+});
+
+/**
+ * Fetch user custom rules with id list (Vue source qn+Lu lines 2280-2302, 2250-2258)
+ * POST /rules/scene/{scene}/prompt with { 规则ID列表: ids }
+ */
+async function fetchRulesWithIds(
+  scene: string,
+  ids: (string | number)[]
+): Promise<string | null> {
+  if (!ids || ids.length === 0) return null;
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/rules/scene/${encodeURIComponent(scene)}/prompt`,
+      {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ 规则ID列表: ids }),
+      }
+    );
+    const result = await res.json();
+    if (result.success && result.data && result.data.prompt) {
+      return result.data.prompt;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Inject custom rules into messages (Vue source qn lines 2280-2302)
+ */
+function injectRulesIntoMessages(
+  messages: { role: string; content: string }[],
+  rulesText: string | null
+): { role: string; content: string }[] {
+  if (!rulesText) return messages;
+  const cloned = JSON.parse(JSON.stringify(messages));
+  const systemIdx = cloned.findIndex((m: any) => m.role === 'system');
+  const rulesBlock = `\n\n【用户自定义规则（优先级最高）】\n${rulesText}`;
+  if (systemIdx !== -1) {
+    cloned[systemIdx].content += rulesBlock;
+  } else {
+    cloned.unshift({
+      role: 'system',
+      content: `【用户自定义规则（优先级最高）】\n${rulesText}`,
+    });
+  }
+  return cloned;
+}
 
 export const CurrencyPanel: React.FC<Props> = ({
   projectId,
@@ -132,6 +261,11 @@ export const CurrencyPanel: React.FC<Props> = ({
   /* Source-derived: 3 collapsible sections (源码 lines 154096-154110) */
   const [核心理念, set核心理念] = useState('');
   const [其他信息, set其他信息] = useState('');
+  const [核心记录id, set核心记录id] = useState<number | null>(null);
+  const [核心记录项目ID, set核心记录项目ID] = useState<number | null>(null);
+  // Suppress TS6133: values used by future CRUD operations matching Vue source
+  void 核心记录id;
+  void 核心记录项目ID;
   const [货币列表, set货币列表] = useState<货币数据[]>([]);
   const [折叠, set折叠] = useState<Record<string, boolean>>({
     核心理念: false,
@@ -139,9 +273,52 @@ export const CurrencyPanel: React.FC<Props> = ({
     其他信息: false,
   });
 
+  // Loading states (Vue source lines 42001-42018: u.value, d.value, g.value)
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [initialized, setInitialized] = useState(false);
+
   const [width, setWidth] = useState(520);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Load currency data (Vue source line 42004: Promise.all for parallel load)
+  useEffect(() => {
+    if (!projectId) return;
+    setLoading(true);
+    setError('');
+    Promise.all([
+      // GET /currencies/project/{id} — 核心理念 + 其他信息 (Vue source Mr.get)
+      fetch(`${API_BASE}/api/currencies/project/${projectId}`, {
+        headers: getAuthHeaders(),
+      }).then(res => res.json()),
+      // GET /currencies/project/{id}/list — 货币列表 (Vue source Mr.getList)
+      fetch(`${API_BASE}/api/currencies/project/${projectId}/list`, {
+        headers: getAuthHeaders(),
+      }).then(res => res.json()),
+    ])
+      .then(([coreResult, listResult]) => {
+        // Vue source lines 42004-42013: extract id, 项目ID, 核心理念, 其他信息
+        if (coreResult.success && coreResult.data) {
+          const d = coreResult.data;
+          if (d.id != null) set核心记录id(d.id);
+          if (d.项目ID != null) set核心记录项目ID(d.项目ID);
+          if (d.核心理念) set核心理念(d.核心理念);
+          if (d.其他信息) set其他信息(d.其他信息);
+        }
+        // Vue source line 42006-42010: load currency list
+        if (listResult.success && Array.isArray(listResult.data)) {
+          set货币列表(listResult.data);
+        }
+        // Vue source line 42014: g.value = !0
+        setInitialized(true);
+      })
+      .catch((err: any) => {
+        // Vue source lines 42015-42016: d.value = le.message || '加载货币体系失败'
+        setError(err.message || '加载货币体系失败');
+      })
+      .finally(() => setLoading(false));
+  }, [projectId]);
 
   /* Edit dialog state (源码 edit currency dialog) */
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -160,19 +337,17 @@ export const CurrencyPanel: React.FC<Props> = ({
   } | null>(null);
   const [genError, setGenError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
-  const fetchSystemPrompt = useSystemPrompt(
-    'AI生成货币体系',
-    buildCurrencySystemPrompt()
-  );
 
+  /* 源码 T() line 42022-42047: save only 核心理念 + 其他信息 */
   const handleSave = useCallback(async () => {
     if (!projectId) return;
     setSaving(true);
     setSaved(false);
     try {
-      await saveVersion('currencies', projectId, {
-        描述: '保存货币体系',
-        内容: { 核心理念, 其他信息, 货币列表 },
+      await fetch(`${API_BASE}/api/currencies/project/${projectId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ 核心理念, 其他信息 }),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -181,15 +356,21 @@ export const CurrencyPanel: React.FC<Props> = ({
     } finally {
       setSaving(false);
     }
-  }, [projectId, 核心理念, 其他信息, 货币列表]);
+  }, [projectId, 核心理念, 其他信息]);
 
-  /* CRUD: new/edit/delete currency (源码: 保存编辑货币, 删除货币) */
+  /* CRUD: new/edit/delete currency (源码 j() line 42109-42124) */
   const openNewCurrency = useCallback(() => {
     setEditingCurrency({
-      id: Date.now(),
       货币名称: '',
-      货币类型: '基础货币',
       货币定义: '',
+      货币类型: '基础货币',
+      使用场景: '',
+      特点: '',
+      参考价值: '',
+      获取方式: '',
+      来源: '',
+      溢价: '',
+      兑换比例示例: '',
     });
     setIsNewCurrency(true);
     setShowEditDialog(true);
@@ -201,22 +382,79 @@ export const CurrencyPanel: React.FC<Props> = ({
     setShowEditDialog(true);
   }, []);
 
-  const saveEditCurrency = useCallback(() => {
-    if (!editingCurrency || !editingCurrency.货币名称) return;
-    if (isNewCurrency) {
-      set货币列表(prev => [...prev, editingCurrency]);
-    } else {
-      set货币列表(prev =>
-        prev.map(c => (c.id === editingCurrency.id ? editingCurrency : c))
-      );
+  /* 源码 H() line 42129-42140: save edit (new→z() POST, edit→W() PUT) */
+  const saveEditCurrency = useCallback(async () => {
+    if (!editingCurrency || !editingCurrency.货币名称?.trim() || !projectId)
+      return;
+    try {
+      if (isNewCurrency) {
+        // 源码 z() line 42049-42069: POST /currencies/project/{id}/item
+        const res = await fetch(
+          `${API_BASE}/api/currencies/project/${projectId}/item`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(editingCurrency),
+          }
+        );
+        const result = await res.json();
+        if (result.success) {
+          // refresh list (源码 z: getList after addItem)
+          const listRes = await fetch(
+            `${API_BASE}/api/currencies/project/${projectId}/list`,
+            { headers: getAuthHeaders() }
+          );
+          const listResult = await listRes.json();
+          if (listResult.success && Array.isArray(listResult.data)) {
+            set货币列表(listResult.data);
+          }
+        }
+      } else if (editingCurrency.id) {
+        // 源码 W() line 42071-42084: PUT /currencies/item/{id}
+        const res = await fetch(
+          `${API_BASE}/api/currencies/item/${editingCurrency.id}`,
+          {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(editingCurrency),
+          }
+        );
+        const result = await res.json();
+        if (result.success) {
+          set货币列表(prev =>
+            prev.map(c =>
+              c.id === editingCurrency.id ? { ...c, ...editingCurrency } : c
+            )
+          );
+        }
+      }
+      setShowEditDialog(false);
+      setEditingCurrency(null);
+    } catch {
+      alert('保存失败');
     }
-    setShowEditDialog(false);
-    setEditingCurrency(null);
-  }, [editingCurrency, isNewCurrency]);
+  }, [editingCurrency, isNewCurrency, projectId]);
 
-  const deleteCurrency = useCallback((id: number) => {
-    set货币列表(prev => prev.filter(c => c.id !== id));
-  }, []);
+  /* 源码 Q() line 42086-42095: DELETE /currencies/item/{id} */
+  const deleteCurrency = useCallback(
+    async (id: number | undefined) => {
+      if (!id || !projectId) return;
+      if (!projectId) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/currencies/item/${id}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders(),
+        });
+        const result = await res.json();
+        if (result.success) {
+          set货币列表(prev => prev.filter(c => c.id !== id));
+        }
+      } catch {
+        alert('删除失败');
+      }
+    },
+    [projectId]
+  );
 
   /* AI generation: open dialog (源码 function W) */
   const openAIDialog = useCallback(() => {
@@ -227,8 +465,9 @@ export const CurrencyPanel: React.FC<Props> = ({
     setShowAIDialog(true);
   }, []);
 
-  /* AI generation: start (源码 function oe) */
+  /* AI generation: start (源码 fe() line 42265-42347) */
   const startGeneration = useCallback(async () => {
+    if (!projectId) return;
     setGenerating(true);
     setStreamText('');
     setGenResult(null);
@@ -236,22 +475,49 @@ export const CurrencyPanel: React.FC<Props> = ({
     const ac = new AbortController();
     abortRef.current = ac;
     try {
-      const existingStr = [
-        核心理念 ? `核心理念：${核心理念}` : '',
-        其他信息 ? `其他信息：${其他信息}` : '',
-        ...货币列表.map(c => `${c.货币名称}(${c.货币类型}): ${c.货币定义}`),
-      ]
-        .filter(Boolean)
-        .join('\n');
+      // 源码 line 42278-42283: getContext → 世界观信息
+      let 世界观: 世界观信息 | null = null;
+      try {
+        const ctxRes = await fetch(
+          `${API_BASE}/api/currencies/project/${projectId}/context`,
+          { headers: getAuthHeaders() }
+        );
+        const ctxResult = await ctxRes.json();
+        if (ctxResult.success && ctxResult.data) {
+          世界观 = ctxResult.data.世界观信息 || null;
+        }
+      } catch {}
 
-      const systemPrompt = await fetchSystemPrompt();
-      const messages = [
-        { role: 'system' as const, content: systemPrompt },
+      // 源码 line 42284: B() → 已有货币名列表
+      const 已有货币名 = 货币列表
+        .map(c => c.货币名称)
+        .filter((n): n is string => !!n?.trim());
+
+      // 源码 line 42288: K(worldview, names)
+      const systemPrompt = buildCurrencyPrompt(世界观, 已有货币名);
+
+      // 源码 line 42287-42294: messages
+      let messages: { role: string; content: string }[] = [
+        { role: 'system', content: systemPrompt },
         {
-          role: 'user' as const,
-          content: `${aiPrompt ? aiPrompt + '\n\n' : ''}${existingStr ? '已有设定：\n' + existingStr + '\n\n' : ''}请生成货币体系，包括核心理念、货币列表和其他信息。每个字段200字以上。按管道格式输出。`,
+          role: 'user',
+          content:
+            aiPrompt ||
+            '请根据世界观信息，生成完整的货币体系设定，包括多种不同等级的货币',
         },
       ];
+
+      // Vue source lines 42303-42306: qn() — fetch user custom rules with id-based filtering
+      const currencyIds = 货币列表
+        .filter(c => c && c.id != null)
+        .map(c => c.id!);
+      if (currencyIds.length > 0) {
+        const rulesText = await fetchRulesWithIds(
+          'AI生成货币体系',
+          currencyIds
+        );
+        messages = injectRulesIntoMessages(messages, rulesText);
+      }
 
       const validated = await generateValidated({
         schema: CurrencySchema,
@@ -270,53 +536,63 @@ export const CurrencyPanel: React.FC<Props> = ({
         setGenError('AI返回格式解析失败');
         return;
       }
-      const data = validated.data as any as CurrencyGenResult;
-
-      const result: any = {};
-      if (typeof data.核心理念 === 'string') result.核心理念 = data.核心理念;
-      if (typeof data.其他信息 === 'string') result.其他信息 = data.其他信息;
-      if (Array.isArray(data.货币列表)) {
-        result.货币列表 = data.货币列表.map((c: any, i: number) => ({
-          id: Date.now() + i,
-          货币名称: c.货币名称 || '新货币',
-          货币类型: c.货币类型 || '基础货币',
-          货币定义: c.货币定义 || '',
-          使用场景: c.使用场景,
-          特点: c.特点,
-          参考价值: c.参考价值,
-          兑换比例示例: c.兑换比例示例,
-          获取方式: c.获取方式,
-          来源: c.来源,
-          溢价情况: c.溢价情况,
-        }));
-      }
-      setGenResult(result);
+      const data = validated.data as CurrencyGenResult;
+      setGenResult({
+        核心理念: data.核心理念 || '',
+        其他信息: data.其他信息 || '',
+        货币列表: data.货币列表 || [],
+      });
     } catch (e: any) {
       if (e.name !== 'AbortError') setGenError(e.message || '生成失败');
     } finally {
       setGenerating(false);
     }
-  }, [aiPrompt, 核心理念, 其他信息, 货币列表, fetchSystemPrompt]);
+  }, [aiPrompt, 货币列表, projectId]);
 
-  /* AI generation: adopt result (源码 function N: 采用最近生成结果) */
-  const adoptResult = useCallback(() => {
-    if (!genResult) return;
-    if (genResult.核心理念) set核心理念(genResult.核心理念);
-    if (genResult.其他信息) set其他信息(genResult.其他信息);
-    if (genResult.货币列表) set货币列表(genResult.货币列表);
-    setShowAIDialog(false);
-    setGenResult(null);
-    if (projectId) {
-      saveVersion('currencies', projectId, {
-        描述: 'AI生成货币体系',
-        内容: {
-          核心理念: genResult.核心理念 || 核心理念,
-          其他信息: genResult.其他信息 || 其他信息,
-          货币列表: genResult.货币列表 || 货币列表,
-        },
-      }).catch(() => {});
+  /* AI generation: adopt result (源码 te() line 42352-42378) */
+  const adoptResult = useCallback(async () => {
+    if (!genResult || !projectId) return;
+    setSaving(true);
+    try {
+      // 源码 line 42357-42359: 设核心理念+其他信息 → T() PUT
+      const new核心理念 = genResult.核心理念 || 核心理念;
+      const new其他信息 = genResult.其他信息 || 其他信息;
+      set核心理念(new核心理念);
+      set其他信息(new其他信息);
+      await fetch(`${API_BASE}/api/currencies/project/${projectId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ 核心理念: new核心理念, 其他信息: new其他信息 }),
+      });
+
+      // 源码 line 42360-42361: 逐个 POST 每个货币
+      const 货币 = genResult.货币列表 || [];
+      for (const item of 货币) {
+        await fetch(`${API_BASE}/api/currencies/project/${projectId}/item`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(item),
+        });
+      }
+
+      // 源码 line 42362-42364: getList 刷新列表
+      const listRes = await fetch(
+        `${API_BASE}/api/currencies/project/${projectId}/list`,
+        { headers: getAuthHeaders() }
+      );
+      const listResult = await listRes.json();
+      if (listResult.success && Array.isArray(listResult.data)) {
+        set货币列表(listResult.data);
+      }
+
+      setShowAIDialog(false);
+      setGenResult(null);
+    } catch {
+      alert('采用生成结果失败');
+    } finally {
+      setSaving(false);
     }
-  }, [genResult, 核心理念, 其他信息, 货币列表, projectId]);
+  }, [genResult, projectId, 核心理念, 其他信息]);
 
   const cancelGeneration = useCallback(() => {
     abortRef.current?.abort();
@@ -412,155 +688,181 @@ export const CurrencyPanel: React.FC<Props> = ({
 
           {/* Section cards (源码 lines 154404-155xxx) */}
           <div className="flex-1 p-4 space-y-4 overflow-y-auto">
-            {/* 核心理念 */}
-            <div className="bg-[var(--bg-dark)] rounded-xl p-4">
-              <div
-                className="flex items-center justify-between cursor-pointer"
-                onClick={() =>
-                  set折叠(prev => ({ ...prev, 核心理念: !prev.核心理念 }))
-                }
-              >
-                <h3 className="flex items-center gap-2 text-sm font-semibold">
-                  <i className="ri-lightbulb-flash-line text-yellow-400" />{' '}
-                  核心理念
-                  <span className="text-xs text-[var(--text-muted)] font-normal">
-                    货币体系的设计理念和经济逻辑
-                  </span>
-                </h3>
-                <i
-                  className={`ri-arrow-${折叠.核心理念 ? 'down' : 'up'}-s-line text-[var(--text-muted)]`}
-                />
+            {/* Loading state */}
+            {loading && !initialized && (
+              <div className="flex items-center justify-center py-12 text-[var(--text-secondary)]">
+                <i className="ri-loader-4-line animate-spin mr-2" />
+                加载中...
               </div>
-              {!折叠.核心理念 && (
-                <textarea
-                  className="mt-3 w-full h-32 p-3 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-sm resize-y focus:outline-none focus:border-yellow-500/50"
-                  placeholder="描述货币体系的核心设计理念，如：以灵气为基础的修仙经济体系，灵石作为通用货币，蕴含可被修士吸收的灵气..."
-                  value={核心理念}
-                  onChange={e => set核心理念(e.target.value)}
-                />
-              )}
-            </div>
-
-            {/* 货币列表 */}
-            <div className="bg-[var(--bg-dark)] rounded-xl p-4">
-              <div
-                className="flex items-center justify-between cursor-pointer"
-                onClick={() =>
-                  set折叠(prev => ({ ...prev, 货币列表: !prev.货币列表 }))
-                }
-              >
-                <h3 className="flex items-center gap-2 text-sm font-semibold">
-                  <i className="ri-exchange-dollar-line text-green-400" />{' '}
-                  货币列表
-                  <span className="text-xs text-[var(--text-muted)] font-normal">
-                    已定义 {货币列表.length} 种货币
-                  </span>
-                </h3>
-                <div
-                  className="flex items-center gap-2"
-                  onClick={e => e.stopPropagation()}
+            )}
+            {/* Error state */}
+            {error && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
+                <i className="ri-error-warning-line mr-1" />
+                {error}
+                <button
+                  className="ml-2 underline text-red-300 hover:text-red-200"
+                  onClick={() => setError('')}
                 >
-                  <button
-                    className="px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded text-xs flex items-center gap-1 transition-colors"
-                    onClick={openNewCurrency}
-                  >
-                    <i className="ri-add-line" /> 添加货币
-                  </button>
-                  <i
-                    className={`ri-arrow-${折叠.货币列表 ? 'down' : 'up'}-s-line text-[var(--text-muted)]`}
-                  />
-                </div>
+                  关闭
+                </button>
               </div>
-              {!折叠.货币列表 && (
-                <div className="mt-3 space-y-3">
-                  {货币列表.map(c => (
+            )}
+            {/* Content — only show after initialized or when data exists */}
+            {!loading || initialized ? (
+              <>
+                {/* 核心理念 */}
+                <div className="bg-[var(--bg-dark)] rounded-xl p-4">
+                  <div
+                    className="flex items-center justify-between cursor-pointer"
+                    onClick={() =>
+                      set折叠(prev => ({ ...prev, 核心理念: !prev.核心理念 }))
+                    }
+                  >
+                    <h3 className="flex items-center gap-2 text-sm font-semibold">
+                      <i className="ri-lightbulb-flash-line text-yellow-400" />{' '}
+                      核心理念
+                      <span className="text-xs text-[var(--text-muted)] font-normal">
+                        货币体系的设计理念和经济逻辑
+                      </span>
+                    </h3>
+                    <i
+                      className={`ri-arrow-${折叠.核心理念 ? 'down' : 'up'}-s-line text-[var(--text-muted)]`}
+                    />
+                  </div>
+                  {!折叠.核心理念 && (
+                    <textarea
+                      className="mt-3 w-full h-32 p-3 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-sm resize-y focus:outline-none focus:border-yellow-500/50"
+                      placeholder="描述货币体系的核心设计理念，如：以灵气为基础的修仙经济体系，灵石作为通用货币，蕴含可被修士吸收的灵气..."
+                      value={核心理念}
+                      onChange={e => set核心理念(e.target.value)}
+                    />
+                  )}
+                </div>
+
+                {/* 货币列表 */}
+                <div className="bg-[var(--bg-dark)] rounded-xl p-4">
+                  <div
+                    className="flex items-center justify-between cursor-pointer"
+                    onClick={() =>
+                      set折叠(prev => ({ ...prev, 货币列表: !prev.货币列表 }))
+                    }
+                  >
+                    <h3 className="flex items-center gap-2 text-sm font-semibold">
+                      <i className="ri-exchange-dollar-line text-green-400" />{' '}
+                      货币列表
+                      <span className="text-xs text-[var(--text-muted)] font-normal">
+                        已定义 {货币列表.length} 种货币
+                      </span>
+                    </h3>
                     <div
-                      key={c.id}
-                      className="bg-[var(--bg-card)] rounded-lg p-3 hover:bg-[var(--border)]/50 transition-colors group"
+                      className="flex items-center gap-2"
+                      onClick={e => e.stopPropagation()}
                     >
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium">
-                            {c.货币名称}
-                          </span>
-                          <span
-                            className={`px-2 py-0.5 rounded text-xs ${货币类型样式[c.货币类型] || 'bg-gray-500/20 text-gray-400'}`}
-                          >
-                            {c.货币类型}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            className="p-1 hover:bg-[var(--bg-dark)] rounded text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                            onClick={() => openEditCurrency(c)}
-                          >
-                            <i className="ri-edit-line" />
-                          </button>
-                          <button
-                            className="p-1 hover:bg-red-500/20 rounded text-xs text-[var(--text-secondary)] hover:text-red-400"
-                            onClick={() => deleteCurrency(c.id)}
-                          >
-                            <i className="ri-delete-bin-line" />
-                          </button>
-                        </div>
-                      </div>
-                      {c.货币定义 && (
-                        <p className="text-xs text-[var(--text-secondary)] mb-2 line-clamp-2">
-                          {c.货币定义}
-                        </p>
-                      )}
-                      <div className="flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
-                        {c.参考价值 && (
-                          <span className="flex items-center gap-1">
-                            <i className="text-yellow-400 ri-price-tag-3-line" />{' '}
-                            {c.参考价值}
-                          </span>
-                        )}
-                        {c.兑换比例示例 && (
-                          <span className="flex items-center gap-1">
-                            <i className="text-blue-400 ri-exchange-line" />{' '}
-                            {c.兑换比例示例}
-                          </span>
-                        )}
-                      </div>
+                      <button
+                        className="px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded text-xs flex items-center gap-1 transition-colors"
+                        onClick={openNewCurrency}
+                      >
+                        <i className="ri-add-line" /> 添加货币
+                      </button>
+                      <i
+                        className={`ri-arrow-${折叠.货币列表 ? 'down' : 'up'}-s-line text-[var(--text-muted)]`}
+                      />
                     </div>
-                  ))}
-                  {货币列表.length === 0 && (
-                    <div className="text-center py-8 text-[var(--text-secondary)] text-sm">
-                      暂无货币
+                  </div>
+                  {!折叠.货币列表 && (
+                    <div className="mt-3 space-y-3">
+                      {货币列表.map(c => (
+                        <div
+                          key={c.id}
+                          className="bg-[var(--bg-card)] rounded-lg p-3 hover:bg-[var(--border)]/50 transition-colors group"
+                        >
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">
+                                {c.货币名称}
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded text-xs ${货币类型样式[c.货币类型] || 'bg-gray-500/20 text-gray-400'}`}
+                              >
+                                {c.货币类型}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                className="p-1 hover:bg-[var(--bg-dark)] rounded text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                                onClick={() => openEditCurrency(c)}
+                              >
+                                <i className="ri-edit-line" />
+                              </button>
+                              <button
+                                className="p-1 hover:bg-red-500/20 rounded text-xs text-[var(--text-secondary)] hover:text-red-400"
+                                onClick={() => deleteCurrency(c.id)}
+                              >
+                                <i className="ri-delete-bin-line" />
+                              </button>
+                            </div>
+                          </div>
+                          {c.货币定义 && (
+                            <p className="text-xs text-[var(--text-secondary)] mb-2 line-clamp-2">
+                              {c.货币定义}
+                            </p>
+                          )}
+                          <div className="flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+                            {c.参考价值 && (
+                              <span className="flex items-center gap-1">
+                                <i className="text-yellow-400 ri-price-tag-3-line" />{' '}
+                                {c.参考价值}
+                              </span>
+                            )}
+                            {c.兑换比例示例 && (
+                              <span className="flex items-center gap-1">
+                                <i className="text-blue-400 ri-exchange-line" />{' '}
+                                {c.兑换比例示例}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      {货币列表.length === 0 && (
+                        <div className="text-center py-8 text-[var(--text-secondary)] text-sm">
+                          暂无货币
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-            </div>
 
-            {/* 其他信息 */}
-            <div className="bg-[var(--bg-dark)] rounded-xl p-4">
-              <div
-                className="flex items-center justify-between cursor-pointer"
-                onClick={() =>
-                  set折叠(prev => ({ ...prev, 其他信息: !prev.其他信息 }))
-                }
-              >
-                <h3 className="flex items-center gap-2 text-sm font-semibold">
-                  <i className="ri-file-info-line text-purple-400" /> 其他信息
-                  <span className="text-xs text-[var(--text-muted)] font-normal">
-                    经济规律、黑市交易等补充信息
-                  </span>
-                </h3>
-                <i
-                  className={`ri-arrow-${折叠.其他信息 ? 'down' : 'up'}-s-line text-[var(--text-muted)]`}
-                />
-              </div>
-              {!折叠.其他信息 && (
-                <textarea
-                  className="mt-3 w-full h-32 p-3 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-sm resize-y focus:outline-none focus:border-yellow-500/50"
-                  placeholder="其他补充信息，如：经济规律、黑市交易规则、特殊货币流通方式等..."
-                  value={其他信息}
-                  onChange={e => set其他信息(e.target.value)}
-                />
-              )}
-            </div>
+                {/* 其他信息 */}
+                <div className="bg-[var(--bg-dark)] rounded-xl p-4">
+                  <div
+                    className="flex items-center justify-between cursor-pointer"
+                    onClick={() =>
+                      set折叠(prev => ({ ...prev, 其他信息: !prev.其他信息 }))
+                    }
+                  >
+                    <h3 className="flex items-center gap-2 text-sm font-semibold">
+                      <i className="ri-file-info-line text-purple-400" />{' '}
+                      其他信息
+                      <span className="text-xs text-[var(--text-muted)] font-normal">
+                        经济规律、黑市交易等补充信息
+                      </span>
+                    </h3>
+                    <i
+                      className={`ri-arrow-${折叠.其他信息 ? 'down' : 'up'}-s-line text-[var(--text-muted)]`}
+                    />
+                  </div>
+                  {!折叠.其他信息 && (
+                    <textarea
+                      className="mt-3 w-full h-32 p-3 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-sm resize-y focus:outline-none focus:border-yellow-500/50"
+                      placeholder="其他补充信息，如：经济规律、黑市交易规则、特殊货币流通方式等..."
+                      value={其他信息}
+                      onChange={e => set其他信息(e.target.value)}
+                    />
+                  )}
+                </div>
+              </>
+            ) : null}
           </div>
 
           {/* Footer */}
@@ -763,16 +1065,16 @@ export const CurrencyPanel: React.FC<Props> = ({
                 </div>
                 <div>
                   <label className="text-sm text-[var(--text-secondary)] block mb-1">
-                    溢价情况
+                    溢价
                   </label>
                   <textarea
                     className="w-full p-3 text-sm bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg resize-y focus:outline-none focus:border-yellow-500/50 min-h-[60px]"
                     placeholder="货币在不同场景的溢价情况（可选）"
-                    value={editingCurrency.溢价情况 || ''}
+                    value={editingCurrency.溢价 || ''}
                     onChange={e =>
                       setEditingCurrency({
                         ...editingCurrency,
-                        溢价情况: e.target.value,
+                        溢价: e.target.value,
                       })
                     }
                   />

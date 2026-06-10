@@ -2,22 +2,14 @@ import React, { useState, useCallback, useEffect } from 'react';
 import {
   useAIGenerate,
   parseAIJSON,
-  useAIFieldGenerate,
   useAIFullGenerate,
   AIGenerationDialog,
   useSystemPrompt,
-  AIButton,
   generateValidated,
   type TypeOption,
   type QuickTemplate,
 } from './panel-shared';
-import {
-  saveVersion,
-  saveGeneration,
-  saveData,
-  API_BASE,
-  getAuthHeaders,
-} from '../useWorldApi';
+import { API_BASE, getAuthHeaders } from '../useWorldApi';
 import { z } from 'zod';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -45,22 +37,56 @@ interface Props {
 
 /* ─── Pipe-format prompt & parser for plot structure ─── */
 
-/** Build system prompt specifying pipe-delimited output format for single-act completion */
-function buildPlotActSystemPrompt(): string {
-  return `你是一个专业的小说情节设计师。请完善给定情节幕的详细内容。
+/** Build optimize-mode system prompt — matches Vue line 54195-54234 */
+function buildPlotActSystemPrompt(context: {
+  项目?: { 名称?: string; 类型?: string; 篇幅字数?: string };
+  世界观?: string;
+  故事核心?: string;
+  角色列表?: Array<{
+    姓名: string;
+    类型?: string;
+    身份?: string;
+    简介?: string;
+  }>;
+}): string {
+  const je = context.项目 || {};
+  const parts: string[] = [];
 
-输出格式要求（严格按此格式，每行一个字段）：
-幕名称|名称
-描述|描述文字
-故事起点|起点描述
-故事终点|终点描述
-内容概要|概要文字
-核心事件|事件描述
-角色发展|发展描述
-冲突升级|冲突描述
-情感基调|基调描述
+  parts.push(`你是一位专业的小说情节优化师，擅长完善和丰富已有的情节设计。`);
 
-每行格式：字段名|内容。不要输出JSON，不要输出markdown代码块。`;
+  parts.push(`【小说基本信息】
+小说名称：${je.名称 || '未命名'}
+小说类型：${je.类型 || '未知'}`);
+
+  if (context.世界观) {
+    parts.push(`【世界观设定】\n${context.世界观}`);
+  }
+  if (context.故事核心) {
+    parts.push(`【故事核心】\n${context.故事核心}`);
+  }
+  if (context.角色列表 && context.角色列表.length > 0) {
+    parts.push(
+      `【主要角色】\n${context.角色列表.map(Y => `${Y.姓名}(${Y.类型 || ''})：${Y.身份 || ''}${Y.简介 ? '，' + Y.简介 : ''}`).join('\n')}`
+    );
+  }
+
+  parts.push(`【输出要求】
+返回JSON格式，与输入保持相同字段结构：
+{
+  "幕名称": "...",
+  "章节范围": "...",
+  "开场故事": "本卷第一章的核心场景/事件（15-150字，只写发生了什么，禁止包含日期）",
+  "结局故事": "本卷最后一章的核心场景/事件（15-150字，只写发生了什么，禁止包含日期）",
+  "内容概要": "完善后的概要（50-100字）",
+  "核心事件": "完善后的核心事件（30-60字）",
+  "角色发展": "完善后的角色发展（30-60字）",
+  "情感基调": "...",
+  "冲突升级": "完善后的冲突升级（30-60字）"
+}
+
+重要：只返回纯JSON，不要有任何代码块标记或其他文字。`);
+
+  return parts.join('\n\n');
 }
 
 /** Parse pipe-delimited format for a single plot act */
@@ -113,25 +139,99 @@ function parsePlotActResponse(text: string): Record<string, string> | null {
   return null;
 }
 
-/** Build system prompt for full plot structure generation (multiple acts) */
-function buildPlotStructureSystemPrompt(): string {
-  return `你是一位专业的小说情节设计师。请设计引人入胜的情节结构，确保起承转合自然流畅。
+/** Build generate-mode system prompt — matches Vue line 54140-54194 */
+function buildPlotStructureSystemPrompt(context: {
+  项目?: { 名称?: string; 类型?: string; 篇幅字数?: string };
+  世界观?: string;
+  故事核心?: string;
+  角色列表?: Array<{
+    姓名: string;
+    类型?: string;
+    身份?: string;
+    简介?: string;
+  }>;
+  情节模式?: { 标签: string; 幕数: number; 幕名称: string[] };
+}): string {
+  const je = context.项目 || {};
+  const ae = context.情节模式 || {
+    标签: '五幕式',
+    幕数: 5,
+    幕名称: ['开端', '发展', '转折', '高潮', '结局'],
+  };
+  const parts: string[] = [];
 
-输出格式要求（严格按此格式）：
-每个幕用 === 分隔，幕内每行格式：
-幕序号|数字
-幕名称|名称
-章节范围|范围描述
-描述|描述文字
-故事起点|起点描述
-故事终点|终点描述
-内容概要|概要文字
-核心事件|事件描述
-角色发展|发展描述
-冲突升级|冲突描述
-情感基调|基调描述
+  parts.push(`你是一位专业的小说情节架构师，擅长设计完整的故事情节脉络。`);
 
-不要输出JSON，不要输出markdown代码块。`;
+  parts.push(`【小说基本信息】
+小说名称：${je.名称 || '未命名'}
+小说类型：${je.类型 || '未知'}
+预计篇幅：${je.篇幅字数 || '未定'}`);
+
+  if (context.世界观) {
+    parts.push(`【世界观设定】\n${context.世界观}`);
+  }
+  if (context.故事核心) {
+    parts.push(`【故事核心】\n${context.故事核心}`);
+  }
+  if (context.角色列表 && context.角色列表.length > 0) {
+    parts.push(
+      `【主要角色】\n${context.角色列表.map(Y => `${Y.姓名}(${Y.类型 || ''})：${Y.身份 || ''}${Y.简介 ? '，' + Y.简介 : ''}`).join('\n')}`
+    );
+  }
+
+  parts.push(`【情节结构模式】
+当前使用「${ae.标签}」模式，共${ae.幕数}幕：${ae.幕名称.join('、')}
+
+【输出格式】（极简格式，节省token）
+M|幕序号|幕名称|章节范围|内容概要
+
+【格式说明】
+- M: 情节幕（每幕一行，共${ae.幕数}幕）
+  - 幕序号：数字1开始递增
+  - 章节范围：如"第1-20章"
+  - 内容概要：该阶段的主要情节概述（10-30字）
+
+【输出示例】
+M|1|开端|第1-15章|主角登场，意外获得神秘传承
+M|2|发展|第16-40章|初入修仙界，遭遇危机与机遇
+M|3|高潮|第41-60章|揭露惊天秘密，决战强敌
+M|4|结局|第61-80章|证道成功，开启新篇章
+
+【核心要求】
+1. 每幕内容要前后连贯，逻辑自洽
+2. 情节安排要符合小说类型的读者期待
+3. 章节范围要合理分配，与篇幅相匹配
+
+【重要规则】
+1. 严格按格式输出，每行一个幕
+2. 按幕序号顺序输出
+3. 不要输出任何其他内容`);
+
+  return parts.join('\n\n');
+}
+
+/** Parse M| pipe format for generate mode — M|幕序号|幕名称|章节范围|内容概要 */
+function parseMLinePipe(text: string): Array<Partial<情节幕数据>> | null {
+  const lines = text
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('M|'));
+
+  if (lines.length === 0) return null;
+
+  const acts: Array<Partial<情节幕数据>> = [];
+  for (const line of lines) {
+    const fields = line.split('|');
+    if (fields.length < 5) continue;
+    acts.push({
+      幕序号: Number(fields[1]) || acts.length + 1,
+      幕名称: (fields[2] || '').trim(),
+      章节范围: (fields[3] || '').trim(),
+      内容概要: (fields[4] || '').trim(),
+    });
+  }
+
+  return acts.length > 0 ? acts : null;
 }
 
 /** Parse pipe-delimited format for multiple plot acts (separated by ===) */
@@ -179,13 +279,20 @@ function parsePlotStructurePipe(
   return acts.length > 0 ? acts : null;
 }
 
-/** Combined parser for full plot structure: pipe first, then JSON fallback */
+/** Combined parser for full plot structure: M| pipe first, then === pipe, then JSON fallback */
 function parsePlotStructureResponse(
   text: string
 ): Array<Partial<情节幕数据>> | null {
   if (!text) return null;
+
+  // Try M| pipe format first (generate mode output)
+  const mLineResult = parseMLinePipe(text.trim());
+  if (mLineResult && mLineResult.length > 0) return mLineResult;
+
+  // Try === separated format (legacy/alternative format)
   const pipeResult = parsePlotStructurePipe(text.trim());
   if (pipeResult && pipeResult.length > 0) return pipeResult;
+
   // JSON fallback — could be array directly or {情节列表: [...]}
   try {
     const parsed = JSON.parse(text);
@@ -396,6 +503,88 @@ const 演示幕列表: 情节幕数据[] = [
   },
 ];
 
+/** Fetch plot-structure context — matches Vue API index line 13953 */
+async function fetchPlotContext(projectId: number): Promise<{
+  项目?: { 名称?: string; 类型?: string; 篇幅字数?: string };
+  世界观?: string;
+  故事核心?: string;
+  角色列表?: Array<{
+    姓名: string;
+    类型?: string;
+    身份?: string;
+    简介?: string;
+  }>;
+} | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/plot-structures/project/${projectId}/context`,
+      { headers: getAuthHeaders() }
+    );
+    const result = await res.json();
+    if (result.success && result.data) return result.data;
+  } catch {}
+  return null;
+}
+
+/** Adopt plot acts to server — per-item POST matching Vue behavior */
+async function adoptPlotActs(
+  projectId: number,
+  acts: Array<Partial<情节幕数据>>
+): Promise<情节幕数据[]> {
+  const saved: 情节幕数据[] = [];
+
+  for (let i = 0; i < acts.length; i++) {
+    const m = acts[i];
+    const payload = {
+      幕序号: m.幕序号 || i + 1,
+      幕名称: m.幕名称 || `第${i + 1}幕`,
+      章节范围: m.章节范围 || '',
+      描述: m.描述 || '',
+      故事起点: m.故事起点 || '',
+      故事终点: m.故事终点 || '',
+      内容概要: m.内容概要 || '',
+      核心事件: m.核心事件 || '',
+      角色发展: m.角色发展 || '',
+      冲突升级: m.冲突升级 || '',
+      情感基调: m.情感基调 || '',
+    };
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/plot-structures/project/${projectId}/plot`,
+        {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload),
+        }
+      );
+      const result = await res.json();
+      if (result.success && result.data) {
+        saved.push(result.data as 情节幕数据);
+      }
+    } catch {}
+  }
+
+  return saved;
+}
+
+/** Refresh plot list from server */
+async function refreshPlotList(
+  projectId: number
+): Promise<情节幕数据[] | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/plot-structures/project/${projectId}/list-with-stats`,
+      { headers: getAuthHeaders() }
+    );
+    const result = await res.json();
+    if (result.success && Array.isArray(result.data)) {
+      return result.data;
+    }
+  } catch {}
+  return null;
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export const PlotStructurePanel: React.FC<Props> = ({
@@ -409,23 +598,30 @@ export const PlotStructurePanel: React.FC<Props> = ({
   const [新增幕数据, set新增幕数据] = useState<Partial<情节幕数据>>({});
   const [显示新增, set显示新增] = useState(false);
 
-  const {
-    generating: aiGenerating,
-    generate: aiGenerate,
-    parsedRef: aiParsedRef,
-  } = useAIGenerate({ module: 'plotstructure', projectId });
+  const { generating: aiGenerating, generate: aiGenerate } = useAIGenerate({
+    module: 'plotstructure',
+    projectId,
+  });
 
   // ── Data fetching ──
   const [data, setData] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!projectId) return;
-    fetch(`${API_BASE}/api/plot-structures/project/${projectId}`, {
-      headers: getAuthHeaders(),
-    })
+    fetch(
+      `${API_BASE}/api/plot-structures/project/${projectId}/list-with-stats`,
+      {
+        headers: getAuthHeaders(),
+      }
+    )
       .then(res => res.json())
       .then(result => {
         if (result.success && result.data) {
+          // If data is an array of acts, set 幕列表
+          if (Array.isArray(result.data)) {
+            set幕列表(result.data);
+          }
+          // Also extract string fields for fullGen compatibility
           const fields: Record<string, string> = {};
           for (const [k, v] of Object.entries(result.data)) {
             if (typeof v === 'string') fields[k] = v;
@@ -442,23 +638,6 @@ export const PlotStructurePanel: React.FC<Props> = ({
     '你是一位专业的小说情节设计师。请设计引人入胜的情节结构，确保起承转合自然流畅。输出JSON格式。'
   );
 
-  const fieldGen = useAIFieldGenerate({
-    module: 'plotstructure',
-    projectId,
-    data,
-    setData,
-    fetchSystemPrompt,
-    buildExistingStr: useCallback(
-      (excludeField?: string) => {
-        return Object.entries(data)
-          .filter(([k, v]) => typeof v === 'string' && v && k !== excludeField)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join('\n');
-      },
-      [data]
-    ),
-  });
-
   const fullGen = useAIFullGenerate({
     module: 'plotstructure',
     projectId,
@@ -468,6 +647,18 @@ export const PlotStructurePanel: React.FC<Props> = ({
     defaultType: '五幕式',
     maxTokens: 8192,
     parseResponse: useCallback((text: string) => {
+      // Try M| pipe format first
+      const mResult = parseMLinePipe(text.trim());
+      if (mResult && mResult.length > 0) {
+        // Convert array to Record<string, string> for fullGen compatibility
+        const record: Record<string, string> = {};
+        mResult.forEach((act, i) => {
+          record[`幕${i + 1}_${act.幕名称 || ''}`] =
+            act.内容概要 || act.描述 || '';
+        });
+        return record;
+      }
+      // Fallback to JSON
       const { data: parsed } = parseAIJSON<Record<string, string>>(text);
       return parsed;
     }, []),
@@ -475,6 +666,54 @@ export const PlotStructurePanel: React.FC<Props> = ({
       return `请为我生成一套完整的情节结构。\n\n结构类型：${type}${desc ? '\n\n用户需求：' + desc : ''}\n\n请设计完整的情节幕列表。输出JSON数组，每个元素包含以下字段：\n{"幕序号":1,"幕名称":"名称","章节范围":"1-96","描述":"概述","故事起点":"起点","故事终点":"终点","内容概要":"概要","核心事件":"事件","角色发展":"发展","冲突升级":"冲突","情感基调":"基调"}\n\n请输出JSON数组。`;
     }, []),
   });
+
+  const handleAIAdopt = useCallback(async () => {
+    if (!projectId || !fullGen.parsed) return;
+
+    const parsedData = fullGen.parsed;
+    let actData: any[] = [];
+
+    if (Array.isArray(parsedData)) {
+      actData = parsedData;
+    } else {
+      // parsed is Record<string, string>, try to extract array
+      try {
+        const str = Object.values(parsedData).find(
+          v => typeof v === 'string' && v.startsWith('[')
+        );
+        if (str) {
+          const arr = JSON.parse(str);
+          if (Array.isArray(arr)) actData = arr;
+        }
+      } catch {}
+    }
+
+    if (actData.length === 0) return;
+
+    // Adopt: per-item POST matching Vue behavior
+    const saved = await adoptPlotActs(
+      projectId,
+      actData.map((m, i) => ({
+        幕序号: m.幕序号 || i + 1,
+        幕名称: m.幕名称 || `第${i + 1}幕`,
+        章节范围: m.章节范围 || '',
+        描述: m.描述 || '',
+        故事起点: m.开场故事 || m.故事起点 || '',
+        故事终点: m.结局故事 || m.故事终点 || '',
+        内容概要: m.内容概要 || '',
+        核心事件: m.核心事件 || '',
+        角色发展: m.角色发展 || '',
+        冲突升级: m.冲突升级 || '',
+        情感基调: m.情感基调 || '',
+      }))
+    );
+
+    // Refresh from server
+    const refreshed = await refreshPlotList(projectId);
+    set幕列表(refreshed || saved);
+
+    fullGen.close();
+  }, [projectId, fullGen]);
 
   const on切换展开 = useCallback((幕序号: number) => {
     set展开的幕(prev => {
@@ -487,49 +726,70 @@ export const PlotStructurePanel: React.FC<Props> = ({
 
   const onAI完善 = useCallback(
     async (幕: 情节幕数据) => {
-      const prompt = `当前幕信息：\n幕序号：${幕.幕序号}\n幕名称：${幕.幕名称}\n章节范围：${幕.章节范围}\n描述：${幕.描述}\n故事起点：${幕.故事起点 || '无'}\n故事终点：${幕.故事终点 || '无'}\n\n请完善此幕的详细内容，补充缺失字段。请按管道格式输出，每行一个字段：\n幕名称|名称\n描述|描述\n故事起点|起点\n故事终点|终点\n内容概要|概要\n核心事件|事件\n角色发展|发展\n冲突升级|冲突\n情感基调|基调`;
+      if (!projectId) return;
+      const 上下文 = await fetchPlotContext(projectId);
+      const systemPrompt = buildPlotActSystemPrompt(上下文 || {});
+      const 已有情节 = `幕序号：${幕.幕序号}\n幕名称：${幕.幕名称}\n章节范围：${幕.章节范围}\n描述：${幕.描述}\n故事起点：${幕.故事起点 || '无'}\n故事终点：${幕.故事终点 || '无'}\n内容概要：${幕.内容概要 || '无'}\n核心事件：${幕.核心事件 || '无'}\n角色发展：${幕.角色发展 || '无'}\n冲突升级：${幕.冲突升级 || '无'}\n情感基调：${幕.情感基调 || '无'}`;
+      const userPrompt = `请优化以下情节幕：\n\n${已有情节}`;
       const messages = [
-        { role: 'system', content: buildPlotActSystemPrompt() },
-        { role: 'user', content: prompt },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
       ];
       const result = await generateValidated({
         schema: PlotActSchema,
         generate: () =>
           aiGenerate(messages, {
             scenario: 'AI生成情节脉络',
-            context: { mode: 'section' },
+            context: { mode: 'optimize', 幕id: 幕.id },
           }),
         parseResponse: parsePlotActResponse,
         maxRetries: 3,
       });
       if (result) {
         set幕列表(prev => {
-          const updated = prev.map(m =>
+          return prev.map(m =>
             m.id === 幕.id ? ({ ...m, ...result.data } as 情节幕数据) : m
           );
-          if (projectId) {
-            saveVersion('plotstructure', projectId, {
-              描述: 'AI完善幕',
-              内容: updated,
-            }).catch(() => {});
-          }
-          return updated;
         });
       }
     },
     [aiGenerate, projectId]
   );
 
-  const on删除幕 = useCallback((幕: 情节幕数据) => {
-    set幕列表(prev => prev.filter(m => m.id !== 幕.id));
-  }, []);
+  const on删除幕 = useCallback(
+    async (幕: 情节幕数据) => {
+      if (!projectId) return;
+      try {
+        await fetch(
+          `${API_BASE}/api/plot-structures/project/${projectId}/plot/${幕.id}`,
+          {
+            method: 'DELETE',
+            headers: getAuthHeaders(),
+          }
+        );
+      } catch {}
+      set幕列表(prev => prev.filter(m => m.id !== 幕.id));
+    },
+    [projectId]
+  );
 
-  const on手动添加 = useCallback(() => {
+  const on手动添加 = useCallback(async () => {
+    if (!projectId) return;
     const 新序号 = 幕列表.length + 1;
-    const 新幕: 情节幕数据 = {
-      id: Date.now(),
+    const 幕数配置 = (() => {
+      const map: Record<string, string[]> = {
+        三幕式: ['开端', '发展', '结局'],
+        五幕式: ['开端', '发展', '转折', '高潮', '结局'],
+        英雄之旅: ['平凡世界', '冒险召唤', '考验', '获得宝物', '回归'],
+        起承转合: ['起', '承', '转', '合'],
+        序破急: ['序', '破', '急'],
+      };
+      return map[当前模式] || map['五幕式'];
+    })();
+    const 默认名称 = 幕数配置[新序号 - 1] || `第${新序号}幕`;
+    const payload = {
       幕序号: 新序号,
-      幕名称: `第${新序号}幕`,
+      幕名称: 默认名称,
       章节范围: '',
       描述: '',
       故事起点: '',
@@ -540,14 +800,58 @@ export const PlotStructurePanel: React.FC<Props> = ({
       冲突升级: '',
       情感基调: '',
     };
-    set幕列表(prev => [...prev, 新幕]);
-    set显示新增(true);
-    set展开的幕(prev => new Set([...prev, 新序号]));
-    set新增幕数据({ ...新幕 });
-  }, [幕列表]);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/plot-structures/project/${projectId}/plot`,
+        {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload),
+        }
+      );
+      const result = await res.json();
+      if (result.success && result.data) {
+        const 新幕 = result.data as 情节幕数据;
+        set幕列表(prev => [...prev, 新幕]);
+        set显示新增(true);
+        set展开的幕(prev => new Set([...prev, 新幕.幕序号]));
+        set新增幕数据({ ...新幕 });
+      }
+    } catch {
+      // Fallback: local only
+      const 新幕: 情节幕数据 = {
+        id: Date.now(),
+        幕序号: 新序号,
+        幕名称: 默认名称,
+        章节范围: '',
+        描述: '',
+        故事起点: '',
+        故事终点: '',
+        内容概要: '',
+        核心事件: '',
+        角色发展: '',
+        冲突升级: '',
+        情感基调: '',
+      };
+      set幕列表(prev => [...prev, 新幕]);
+      set显示新增(true);
+      set展开的幕(prev => new Set([...prev, 新序号]));
+      set新增幕数据({ ...新幕 });
+    }
+  }, [projectId, 幕列表, 当前模式]);
 
-  const on保存新增 = useCallback(() => {
-    if (!新增幕数据.id) return;
+  const on保存新增 = useCallback(async () => {
+    if (!新增幕数据.id || !projectId) return;
+    try {
+      await fetch(
+        `${API_BASE}/api/plot-structures/project/${projectId}/plot/${新增幕数据.id}`,
+        {
+          method: 'PUT',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(新增幕数据),
+        }
+      );
+    } catch {}
     set幕列表(prev =>
       prev.map(m =>
         m.id === 新增幕数据.id ? ({ ...m, ...新增幕数据 } as 情节幕数据) : m
@@ -555,7 +859,7 @@ export const PlotStructurePanel: React.FC<Props> = ({
     );
     set显示新增(false);
     set新增幕数据({});
-  }, [新增幕数据]);
+  }, [新增幕数据, projectId]);
 
   const on取消新增 = useCallback(() => {
     if (新增幕数据.id) {
@@ -609,13 +913,59 @@ export const PlotStructurePanel: React.FC<Props> = ({
                 className="p-1.5 hover:bg-[var(--bg-dark)] rounded transition-colors text-xs cursor-pointer text-[var(--text-secondary)] disabled:opacity-50"
                 title="AI生成情节"
                 onClick={async () => {
-                  const prompt = `当前结构模式：${当前模式}\n已有幕数据：\n${幕列表.map(m => `第${m.幕序号}幕 ${m.幕名称}(${m.章节范围}): ${m.描述}`).join('\n')}\n\n请基于${当前模式}结构生成完整的情节幕列表。请用管道格式输出，每个幕用 === 分隔。每行格式：幕序号|数字\n幕名称|名称\n章节范围|范围\n描述|描述\n故事起点|起点\n故事终点|终点\n内容概要|概要\n核心事件|事件\n角色发展|发展\n冲突升级|冲突\n情感基调|基调`;
+                  if (!projectId) return;
+                  const 上下文 = await fetchPlotContext(projectId);
+                  const 幕数配置 = (() => {
+                    const map: Record<
+                      string,
+                      { 标签: string; 幕数: number; 幕名称: string[] }
+                    > = {
+                      三幕式: {
+                        标签: '三幕式',
+                        幕数: 3,
+                        幕名称: ['开端', '发展', '结局'],
+                      },
+                      五幕式: {
+                        标签: '五幕式',
+                        幕数: 5,
+                        幕名称: ['开端', '发展', '转折', '高潮', '结局'],
+                      },
+                      英雄之旅: {
+                        标签: '英雄之旅',
+                        幕数: 5,
+                        幕名称: [
+                          '平凡世界',
+                          '冒险召唤',
+                          '考验',
+                          '获得宝物',
+                          '回归',
+                        ],
+                      },
+                      起承转合: {
+                        标签: '起承转合',
+                        幕数: 4,
+                        幕名称: ['起', '承', '转', '合'],
+                      },
+                      序破急: {
+                        标签: '序破急',
+                        幕数: 3,
+                        幕名称: ['序', '破', '急'],
+                      },
+                    };
+                    return map[当前模式] || map['五幕式'];
+                  })();
+                  const systemPrompt = buildPlotStructureSystemPrompt({
+                    ...上下文,
+                    情节模式: 幕数配置,
+                  });
+                  const 已有幕提示 =
+                    幕列表.length > 0
+                      ? `\n\n已有情节脉络：\n${幕列表.map(m => `第${m.幕序号}幕 ${m.幕名称}(${m.章节范围}): ${m.描述 || m.内容概要 || ''}`).join('\n')}`
+                      : '';
+                  const userPrompt = `请为我设计完整的情节脉络。${已有幕提示}`;
                   const messages = [
-                    {
-                      role: 'system',
-                      content: buildPlotStructureSystemPrompt(),
-                    },
-                    { role: 'user', content: prompt },
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
                   ];
                   const gvResult = await generateValidated({
                     schema: PlotActArraySchema,
@@ -639,21 +989,21 @@ export const PlotStructurePanel: React.FC<Props> = ({
                         幕名称: m.幕名称 || `第${i + 1}幕`,
                         章节范围: m.章节范围 || '',
                         描述: m.描述 || '',
-                        故事起点: m.故事起点 || '',
-                        故事终点: m.故事终点 || '',
+                        故事起点: m.开场故事 || m.故事起点 || '',
+                        故事终点: m.结局故事 || m.故事终点 || '',
                         内容概要: m.内容概要 || '',
                         核心事件: m.核心事件 || '',
                         角色发展: m.角色发展 || '',
                         冲突升级: m.冲突升级 || '',
                         情感基调: m.情感基调 || '',
                       }));
-                      set幕列表(newList);
-                      if (projectId) {
-                        saveVersion('plotstructure', projectId, {
-                          描述: 'AI生成情节脉络',
-                          内容: newList,
-                        }).catch(() => {});
-                      }
+                      // Adopt: per-item POST matching Vue behavior
+                      const saved = await adoptPlotActs(projectId, newList);
+                      // Refresh from server
+                      const refreshed = await refreshPlotList(projectId);
+                      set幕列表(
+                        refreshed || (saved.length > 0 ? saved : newList)
+                      );
                     }
                   }
                 }}
@@ -1093,7 +1443,7 @@ export const PlotStructurePanel: React.FC<Props> = ({
         typeOptions={类型选项}
         quickTemplates={快捷模板}
         onStart={fullGen.start}
-        onAdopt={fullGen.adopt}
+        onAdopt={handleAIAdopt}
         onClose={fullGen.close}
       />
     </div>

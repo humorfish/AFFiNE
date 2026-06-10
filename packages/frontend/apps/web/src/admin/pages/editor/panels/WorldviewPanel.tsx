@@ -6,26 +6,135 @@ import {
   saveVersion,
   saveGeneration,
   saveData,
+  adoptGeneration,
   API_BASE,
   getAuthHeaders,
 } from '../useWorldApi';
-import {
-  WORLDVIEW_SYSTEM_PROMPT,
-  WORLDVIEW_FIELD_SYSTEM_PROMPT,
-} from './worldview-prompt';
+import { WORLDVIEW_SYSTEM_PROMPT } from './worldview-prompt';
 
 /** Zod schema for validating a single worldview field output from LLM */
 const worldviewFieldSchema = (field: string) =>
   z
     .object({
-      [field]: z.string().min(30),
+      [field]: z.string(),
     })
     .passthrough();
+
+/** Structured calendar data matching Vue N() function */
+interface CalendarData {
+  历法名称: string;
+  故事起点日期: string;
+  每年月数: number;
+  每月天数: number;
+  每日时辰数: number;
+  显示格式: string;
+  纪年体系: { 名称: string; 序号: number; 描述: string }[];
+  时辰名称: string[];
+  时长模板: { 类型: string; 默认天数: number }[];
+}
+
+/** Parse CAL-prefixed lines into structured CalendarData (Vue N() lines 41281-41319) */
+function parseCalendarLines(calLines: string[]): CalendarData | null {
+  let result: CalendarData | null = null;
+  for (const line of calLines) {
+    const J = line.trim();
+    if (J.startsWith('CAL|')) {
+      const pe = J.substring(4).split('|');
+      if (pe.length >= 3) {
+        result = {
+          历法名称: pe[0]?.trim() || '默认历法',
+          故事起点日期: pe[1]?.trim() || '',
+          每年月数: parseInt(pe[2]) || 12,
+          每月天数: parseInt(pe[3]) || 30,
+          每日时辰数: parseInt(pe[4]) || 12,
+          显示格式: pe[5]?.trim() || '中式',
+          纪年体系: [],
+          时辰名称: [],
+          时长模板: [],
+        };
+      }
+    } else if (J.startsWith('CAL_ERA|')) {
+      const pe = J.substring(8)
+        .split(',')
+        .map((ge, Ve) => ({ 名称: ge.trim(), 序号: Ve + 1, 描述: '' }))
+        .filter(ge => ge.名称);
+      if (result) result.纪年体系 = pe;
+      else
+        result = {
+          历法名称: '',
+          故事起点日期: '',
+          每年月数: 12,
+          每月天数: 30,
+          每日时辰数: 12,
+          显示格式: '中式',
+          纪年体系: pe,
+          时辰名称: [],
+          时长模板: [],
+        };
+    } else if (J.startsWith('CAL_TIME|')) {
+      const pe = J.substring(9)
+        .split(',')
+        .map(ge => ge.trim())
+        .filter(ge => ge);
+      if (result) result.时辰名称 = pe;
+      else
+        result = {
+          历法名称: '',
+          故事起点日期: '',
+          每年月数: 12,
+          每月天数: 30,
+          每日时辰数: 12,
+          显示格式: '中式',
+          纪年体系: [],
+          时辰名称: pe,
+          时长模板: [],
+        };
+    } else if (J.startsWith('CAL_TPL|')) {
+      const pe = J.substring(8)
+        .split(',')
+        .map(ge => {
+          const [Ve, Ne] = ge.split(':');
+          return { 类型: Ve?.trim() || '', 默认天数: parseInt(Ne) || 1 };
+        })
+        .filter(ge => ge.类型);
+      if (result) result.时长模板 = pe;
+      else
+        result = {
+          历法名称: '',
+          故事起点日期: '',
+          每年月数: 12,
+          每月天数: 30,
+          每日时辰数: 12,
+          显示格式: '中式',
+          纪年体系: [],
+          时辰名称: [],
+          时长模板: pe,
+        };
+    }
+  }
+  return result;
+}
 
 interface Props {
   projectId: number | null;
   onClose: () => void;
   leftOffset?: number;
+}
+
+interface VersionEntry {
+  id: string;
+  时间: string;
+  描述: string;
+  内容: Record<string, any>;
+}
+
+interface GenEntry {
+  id: string;
+  时间: string;
+  提示词: string;
+  生成类型: string;
+  生成内容: Record<string, any>;
+  已采用: boolean;
 }
 
 /* ====================== Demo Data ====================== */
@@ -42,6 +151,7 @@ function parseWorldviewPipe(text: string): Record<string, string> | null {
     特殊元素 = '',
     主要冲突 = '',
     势力格局 = '';
+  const calLines: string[] = [];
 
   for (const line of lines) {
     const t = line.trim();
@@ -60,10 +170,11 @@ function parseWorldviewPipe(text: string): Record<string, string> | null {
     else if (t.startsWith('E|')) 特殊元素 = t.substring(2).trim();
     else if (t.startsWith('C|')) 主要冲突 = t.substring(2).trim();
     else if (t.startsWith('F|')) 势力格局 = t.substring(2).trim();
+    else if (t.startsWith('CAL')) calLines.push(t);
   }
 
   if (basic && basic.世界名称) {
-    return {
+    const result: Record<string, string> = {
       世界名称: basic.世界名称,
       世界类型: basic.世界类型,
       时代背景,
@@ -75,6 +186,14 @@ function parseWorldviewPipe(text: string): Record<string, string> | null {
       主要冲突,
       势力格局,
     };
+    if (calLines.length > 0) {
+      result.世界历法 = calLines.join('\n');
+      const calData = parseCalendarLines(calLines);
+      if (calData) {
+        result._历法数据 = JSON.stringify(calData);
+      }
+    }
+    return result;
   }
   return null;
 }
@@ -183,7 +302,6 @@ const 编辑面板标签页 = [
   { key: 'basic', 标题: '基础设定' },
   { key: 'geography', 标题: '地理环境' },
   { key: 'society', 标题: '社会结构' },
-  { key: 'power', 标题: '力量体系' },
   { key: 'history', 标题: '历史事件' },
   { key: 'extra', 标题: '补充设定' },
 ];
@@ -195,7 +313,6 @@ export const WorldviewPanel: React.FC<Props> = ({
 }) => {
   const [折叠, set折叠] = useState<Record<string, boolean>>({
     basic: true,
-    core: true,
     env: true,
     conflict: true,
     notes: true,
@@ -213,6 +330,9 @@ export const WorldviewPanel: React.FC<Props> = ({
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [showGenHistory, setShowGenHistory] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [版本历史, set版本历史] = useState<VersionEntry[]>([]);
+  const [当前版本索引, set当前版本索引] = useState<number>(-1);
+  const [生成历史, set生成历史] = useState<GenEntry[]>([]);
   const {
     generating: aiGenerating,
     streamText: aiStreamText,
@@ -234,29 +354,84 @@ export const WorldviewPanel: React.FC<Props> = ({
   const [data, setData] = useState<Record<string, string>>({});
   const [dataLoading, setDataLoading] = useState(false);
 
-  // Fetch worldview data from original API
+  // Fetch worldview data from original API (/full endpoint)
   useEffect(() => {
     if (!projectId) return;
     setDataLoading(true);
-    fetch(`${API_BASE}/api/worldviews/project/${projectId}`, {
+    fetch(`${API_BASE}/api/worldviews/project/${projectId}/full`, {
       headers: getAuthHeaders(),
     })
       .then(res => res.json())
       .then(result => {
         if (result.success && result.data) {
-          const fields: Record<string, string> = {};
-          for (const [k, v] of Object.entries(result.data)) {
-            if (typeof v === 'string') fields[k] = v;
+          const E = result.data;
+          // 1. World content
+          if (E.世界观内容) {
+            const F = E.世界观内容;
+            const fields: Record<string, string> = {};
+            for (const k of [
+              '世界名称',
+              '世界类型',
+              '时代背景',
+              '核心规则',
+              '地理环境',
+              '社会结构',
+              '历史背景',
+              '特殊元素',
+              '主要冲突',
+              '势力格局',
+              '备注',
+            ]) {
+              if (typeof F[k] === 'string') fields[k] = F[k];
+            }
+            setData(fields);
           }
-          setData(fields);
+          // 2. Version history
+          if (E.版本历史 && Array.isArray(E.版本历史)) {
+            set版本历史(
+              E.版本历史.map((F: any) => ({
+                id: F.id,
+                时间: new Date(F.时间).toLocaleString('zh-CN'),
+                描述: F.描述,
+                内容: F.内容,
+              }))
+            );
+            set当前版本索引(E.版本历史.length - 1);
+          }
+          // 3. Generation history
+          if (E.生成历史 && Array.isArray(E.生成历史)) {
+            set生成历史(
+              E.生成历史.map((F: any) => ({
+                id: F.id,
+                时间: new Date(F.时间).toLocaleString('zh-CN'),
+                提示词: F.提示词,
+                生成类型: F.生成类型,
+                生成内容: F.生成内容,
+                已采用: F.已采用,
+              }))
+            );
+          }
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        // Vue: _e() — restore from localStorage
+        try {
+          const cached = localStorage.getItem('worldview_data');
+          if (cached) {
+            const te = JSON.parse(cached);
+            if (te.世界观内容) setData(te.世界观内容);
+            if (te.版本历史) set版本历史(te.版本历史);
+            if (te.当前版本索引 != null) set当前版本索引(te.当前版本索引);
+            if (te.生成历史) set生成历史(te.生成历史);
+          }
+        } catch {}
+      })
       .finally(() => setDataLoading(false));
   }, [projectId]);
 
-  // Fetch system prompt from rules API (matching original site)
+  // Fetch system prompt from rules API — append custom rules, never replace (Vue: z() base + Lu() append)
   const fetchSystemPrompt = useCallback(async (): Promise<string> => {
+    let basePrompt = WORLDVIEW_SYSTEM_PROMPT;
     try {
       const res = await fetch(
         `${API_BASE}/api/rules/scene/${encodeURIComponent('AI生成世界观')}`,
@@ -264,18 +439,24 @@ export const WorldviewPanel: React.FC<Props> = ({
       );
       const result = await res.json();
       if (result.success && result.data) {
-        // API may return the prompt as a string or in a field
         const d = result.data;
-        if (typeof d === 'string') return d;
-        if (d.systemPrompt) return d.systemPrompt;
-        if (d.prompt) return d.prompt;
-        if (d.content) return d.content;
+        const rules =
+          typeof d === 'string'
+            ? d
+            : d.systemPrompt || d.prompt || d.content || '';
+        if (rules && rules !== basePrompt) {
+          // Vue: append custom rules, don't replace
+          basePrompt += '\n\n【用户自定义规则】\n' + rules;
+        }
       }
     } catch {}
-    return WORLDVIEW_SYSTEM_PROMPT; // fallback to hardcoded
+    return basePrompt;
   }, []);
 
   // Calendar state
+  const [parsedCalendar, setParsedCalendar] = useState<CalendarData | null>(
+    null
+  );
   const [历法, set历法] = useState({
     名称: '天元纪年',
     纪年体系: [
@@ -323,15 +504,16 @@ export const WorldviewPanel: React.FC<Props> = ({
     }));
   };
 
-  // Save worldview data
+  // Save worldview data — POST to real API + version snapshot
   const handleSave = useCallback(async () => {
     if (!projectId) return;
     setSaving(true);
     try {
-      await saveVersion('worldview', projectId, {
+      await saveData('worldview', projectId, { ...data });
+      saveVersion('worldview', projectId, {
         描述: '保存世界观设定',
         内容: { ...data },
-      });
+      }).catch(() => {});
       setLastSavedAt(new Date().toLocaleTimeString());
     } catch {
     } finally {
@@ -344,16 +526,42 @@ export const WorldviewPanel: React.FC<Props> = ({
     if (!projectId) return;
     setSaving(true);
     try {
-      await saveVersion('worldview', projectId, {
+      await saveData('worldview', projectId, { ...data });
+      saveVersion('worldview', projectId, {
         描述: '手动保存版本',
         内容: { ...data },
-      });
+      }).catch(() => {});
       setLastSavedAt(new Date().toLocaleTimeString());
     } catch {
     } finally {
       setSaving(false);
     }
   }, [projectId, data]);
+
+  // Auto-save with 2s debounce (Vue: watch(t, B, { deep: true }))
+  useEffect(() => {
+    if (!projectId || Object.keys(data).length === 0) return;
+    const timer = setTimeout(() => {
+      saveData('worldview', projectId, { ...data })
+        .then(() => {
+          setLastSavedAt(new Date().toLocaleTimeString());
+          // Cache to localStorage (Vue: K() function)
+          try {
+            localStorage.setItem(
+              'worldview_data',
+              JSON.stringify({
+                世界观内容: data,
+                版本历史,
+                当前版本索引,
+                生成历史,
+              })
+            );
+          } catch {}
+        })
+        .catch(() => {});
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [projectId, data, 版本历史, 当前版本索引, 生成历史]);
 
   // Undo
   const handleUndo = useCallback(() => {
@@ -463,13 +671,13 @@ export const WorldviewPanel: React.FC<Props> = ({
       abortCtrlRef.current = ac;
 
       // Use JSON-focused prompt for field generation (100% success rate vs 80% with pipe prompt)
-      const systemPrompt = WORLDVIEW_FIELD_SYSTEM_PROMPT;
+      const systemPrompt = WORLDVIEW_SYSTEM_PROMPT;
       const existing = buildExistingStr(field);
       const messages = [
         { role: 'system' as const, content: systemPrompt },
         {
           role: 'user' as const,
-          content: `基于以下已有世界观设定，请生成"${field}"部分的详细内容。\n\n已有设定：\n${existing || '暂无'}\n\n用户补充要求：请根据已有设定生成合适的内容\n\n请直接输出JSON对象。`,
+          content: `基于以下已有世界观设定，请生成"${field}"部分的详细内容。\n\n已有设定：\n${existing || '暂无'}\n\n用户补充要求：请根据已有设定生成合适的内容\n\n只需要返回一个JSON对象，只包含"${field}"字段及其内容。`,
         },
       ];
 
@@ -495,21 +703,30 @@ export const WorldviewPanel: React.FC<Props> = ({
 
           // Auto-save flow (matching original site)
           if (projectId) {
-            // 1. saveGeneration
-            saveGeneration('worldview', projectId, {
+            // 1. saveGeneration and get id
+            const genResult = await saveGeneration('worldview', projectId, {
               提示词: '',
               生成类型: 'section',
               生成内容: { [field]: content },
-            }).catch(() => {});
+            });
 
-            // 2. saveVersion
+            // 2. adoptGeneration — mark as adopted
+            if (genResult?.success && genResult?.data?.id) {
+              await adoptGeneration(
+                'worldview',
+                projectId,
+                genResult.data.id
+              ).catch(() => {});
+            }
+
+            // 3. saveVersion
             const merged = { ...data, [field]: content };
             saveVersion('worldview', projectId, {
               描述: `AI生成${field}`,
               内容: merged,
             }).catch(() => {});
 
-            // 3. PUT save data
+            // 4. saveData (PUT)
             saveData('worldview', projectId, merged).catch(() => {});
           }
         }
@@ -532,18 +749,54 @@ export const WorldviewPanel: React.FC<Props> = ({
     const merged = { ...data, ...genContent };
     setData(merged);
 
+    // Populate structured calendar state from CAL lines (using parseCalendarLines)
+    if (genContent.世界历法) {
+      const calText = genContent.世界历法 as string;
+      const calLines = calText
+        .split('\n')
+        .map(l => l.trim())
+        .filter(Boolean);
+      const calData = parseCalendarLines(calLines);
+      if (calData) {
+        setParsedCalendar(calData);
+        // Sync to calendar UI state
+        set历法(prev => ({
+          ...prev,
+          名称: calData.历法名称 || prev.名称,
+          故事起点: calData.故事起点日期 || prev.故事起点,
+          每年月数: calData.每年月数 || prev.每年月数,
+          每月天数: calData.每月天数 || prev.每月天数,
+          每日时辰: calData.每日时辰数 || prev.每日时辰,
+          显示格式: calData.显示格式 || prev.显示格式,
+          纪年体系: calData.纪年体系.map(e => ({ 名称: e.名称, 描述: e.描述 })),
+          时长模板: calData.时长模板.map(e => ({
+            类型: e.类型,
+            天数: e.默认天数,
+          })),
+        }));
+      }
+    }
+
     // Save flow (matching original site)
     if (projectId) {
-      saveGeneration('worldview', projectId, {
+      const genResult = await saveGeneration('worldview', projectId, {
         提示词: `世界类型：${fullGenType}${fullGenDesc ? '\n\n' + fullGenDesc : ''}`,
         生成类型: 'full',
         生成内容: genContent,
-      }).catch(() => {});
+      });
+
+      // adoptGeneration
+      if (genResult?.success && genResult?.data?.id) {
+        await adoptGeneration('worldviews', projectId, genResult.data.id).catch(
+          () => {}
+        );
+      }
+
       saveVersion('worldview', projectId, {
         描述: 'AI生成世界观',
         内容: merged,
       }).catch(() => {});
-      saveData('worldview', projectId, merged).catch(() => {});
+      saveData('worldviews', projectId, merged).catch(() => {});
     }
 
     setFullGenPhase(null);
@@ -661,7 +914,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                   onClick={() => setShowVersionHistory(v => !v)}
                 >
                   <i className="ri-history-line" />
-                  <span className="ml-0.5">(3)</span>
+                  <span className="ml-0.5">({版本历史.length})</span>
                 </button>
                 <button
                   className="p-1.5 hover:bg-[var(--bg-dark)] rounded transition-colors text-xs"
@@ -669,7 +922,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                   onClick={() => setShowGenHistory(v => !v)}
                 >
                   <i className="ri-time-line" />
-                  <span className="ml-0.5">(5)</span>
+                  <span className="ml-0.5">({生成历史.length})</span>
                 </button>
                 <button
                   className={`p-1.5 hover:bg-[var(--bg-dark)] rounded transition-colors ${saving ? 'text-yellow-400 animate-pulse' : ''}`}
@@ -742,7 +995,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                         type="text"
                         className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded px-3 py-2 text-sm focus:border-[var(--primary)] transition-colors"
                         placeholder="如：九州大陆、星际联邦..."
-                        value={data.世界名称}
+                        value={data.世界名称 ?? ''}
                         onChange={e => update('世界名称', e.target.value)}
                       />
                     </div>
@@ -788,7 +1041,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                         <textarea
                           className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded px-3 py-2 text-sm min-h-[120px] max-h-[250px] overflow-y-auto resize-y focus:border-[var(--primary)] transition-colors pr-16"
                           placeholder="如：灵气复苏三千年后，人类文明进入新的纪元..."
-                          value={data.时代背景}
+                          value={data.时代背景 ?? ''}
                           onChange={e => update('时代背景', e.target.value)}
                           style={{ fontSize: 字体大小['时代背景'] || 14 }}
                         />
@@ -814,7 +1067,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                         <textarea
                           className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded px-3 py-2 text-sm min-h-[100px] max-h-[250px] overflow-y-auto resize-y focus:border-[var(--primary)] transition-colors pr-16"
                           placeholder="这个世界的基本运行法则..."
-                          value={data.核心规则}
+                          value={data.核心规则 ?? ''}
                           onChange={e => update('核心规则', e.target.value)}
                           style={{ fontSize: 字体大小['核心规则'] || 14 }}
                         />
@@ -840,7 +1093,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                         <textarea
                           className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded px-3 py-2 text-sm min-h-[100px] max-h-[250px] overflow-y-auto resize-y focus:border-[var(--primary)] transition-colors pr-16"
                           placeholder="独特的世界元素..."
-                          value={data.特殊元素}
+                          value={data.特殊元素 ?? ''}
                           onChange={e => update('特殊元素', e.target.value)}
                           style={{ fontSize: 字体大小['特殊元素'] || 14 }}
                         />
@@ -849,67 +1102,6 @@ export const WorldviewPanel: React.FC<Props> = ({
                           onAdjust={adjustFontSize}
                         />
                       </div>
-                    </div>
-                  </CollapsibleSection>
-
-                  {/* 核心设定 */}
-                  <CollapsibleSection
-                    sectionKey="core"
-                    title="核心设定"
-                    icon="ri-focus-3-line"
-                    iconColor="text-[var(--secondary)]"
-                    折叠={折叠}
-                    toggleSection={toggleSection}
-                  >
-                    <div className="space-y-3">
-                      <TextareaWithAI
-                        label="修炼体系"
-                        placeholder="修炼境界划分、进阶方式..."
-                        value={data.修炼体系}
-                        onChange={v => update('修炼体系', v)}
-                        minH={150}
-                        maxH={300}
-                        字体大小={字体大小}
-                        adjustFontSize={adjustFontSize}
-                        onAIGenerate={() => handleAIGenerateField('修炼体系')}
-                        aiLoading={aiGeneratingField === '修炼体系'}
-                      />
-                      <TextareaWithAI
-                        label="天道法则"
-                        placeholder="天道法则的运行方式..."
-                        value={data.天道法则}
-                        onChange={v => update('天道法则', v)}
-                        minH={130}
-                        maxH={300}
-                        字体大小={字体大小}
-                        adjustFontSize={adjustFontSize}
-                        onAIGenerate={() => handleAIGenerateField('天道法则')}
-                        aiLoading={aiGeneratingField === '天道法则'}
-                      />
-                      <TextareaWithAI
-                        label="天地灵气"
-                        placeholder="灵气分布与特征..."
-                        value={data.天地灵气}
-                        onChange={v => update('天地灵气', v)}
-                        minH={120}
-                        maxH={300}
-                        字体大小={字体大小}
-                        adjustFontSize={adjustFontSize}
-                        onAIGenerate={() => handleAIGenerateField('天地灵气')}
-                        aiLoading={aiGeneratingField === '天地灵气'}
-                      />
-                      <TextareaWithAI
-                        label="境界压制"
-                        placeholder="境界间的压制关系..."
-                        value={data.境界压制}
-                        onChange={v => update('境界压制', v)}
-                        minH={100}
-                        maxH={250}
-                        字体大小={字体大小}
-                        adjustFontSize={adjustFontSize}
-                        onAIGenerate={() => handleAIGenerateField('境界压制')}
-                        aiLoading={aiGeneratingField === '境界压制'}
-                      />
                     </div>
                   </CollapsibleSection>
 
@@ -926,7 +1118,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                       <TextareaWithAI
                         label="地理概述"
                         placeholder="主要地形、气候特征、重要地点..."
-                        value={data.地理环境}
+                        value={data.地理环境 ?? ''}
                         onChange={v => update('地理环境', v)}
                         minH={180}
                         maxH={350}
@@ -938,7 +1130,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                       <TextareaWithAI
                         label="社会结构"
                         placeholder="社会阶层、势力组织、权力结构..."
-                        value={data.社会结构}
+                        value={data.社会结构 ?? ''}
                         onChange={v => update('社会结构', v)}
                         minH={160}
                         maxH={300}
@@ -950,7 +1142,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                       <TextareaWithAI
                         label="历史背景"
                         placeholder="重要历史事件、传说故事..."
-                        value={data.历史背景}
+                        value={data.历史背景 ?? ''}
                         onChange={v => update('历史背景', v)}
                         minH={160}
                         maxH={300}
@@ -962,10 +1154,10 @@ export const WorldviewPanel: React.FC<Props> = ({
                     </div>
                   </CollapsibleSection>
 
-                  {/* 冲突与矛盾 */}
+                  {/* 主要冲突 */}
                   <CollapsibleSection
                     sectionKey="conflict"
-                    title="冲突与矛盾"
+                    title="主要冲突"
                     icon="ri-sword-line"
                     iconColor="text-red-400"
                     折叠={折叠}
@@ -973,45 +1165,21 @@ export const WorldviewPanel: React.FC<Props> = ({
                   >
                     <div className="space-y-3">
                       <TextareaWithAI
-                        label="核心矛盾"
-                        placeholder="核心矛盾来源..."
-                        value={data.核心矛盾}
-                        onChange={v => update('核心矛盾', v)}
+                        label="主要冲突"
+                        placeholder="世界的主要矛盾与冲突..."
+                        value={data.主要冲突 ?? ''}
+                        onChange={v => update('主要冲突', v)}
                         minH={140}
                         maxH={300}
                         字体大小={字体大小}
                         adjustFontSize={adjustFontSize}
-                        onAIGenerate={() => handleAIGenerateField('核心矛盾')}
-                        aiLoading={aiGeneratingField === '核心矛盾'}
-                      />
-                      <TextareaWithAI
-                        label="阶级矛盾"
-                        placeholder="阶级之间的矛盾..."
-                        value={data.阶级矛盾}
-                        onChange={v => update('阶级矛盾', v)}
-                        minH={130}
-                        maxH={300}
-                        字体大小={字体大小}
-                        adjustFontSize={adjustFontSize}
-                        onAIGenerate={() => handleAIGenerateField('阶级矛盾')}
-                        aiLoading={aiGeneratingField === '阶级矛盾'}
-                      />
-                      <TextareaWithAI
-                        label="种族矛盾"
-                        placeholder="种族间的矛盾与冲突..."
-                        value={data.种族矛盾}
-                        onChange={v => update('种族矛盾', v)}
-                        minH={130}
-                        maxH={300}
-                        字体大小={字体大小}
-                        adjustFontSize={adjustFontSize}
-                        onAIGenerate={() => handleAIGenerateField('种族矛盾')}
-                        aiLoading={aiGeneratingField === '种族矛盾'}
+                        onAIGenerate={() => handleAIGenerateField('主要冲突')}
+                        aiLoading={aiGeneratingField === '主要冲突'}
                       />
                       <TextareaWithAI
                         label="势力格局"
                         placeholder="主要势力分布、相互关系..."
-                        value={data.势力格局}
+                        value={data.势力格局 ?? ''}
                         onChange={v => update('势力格局', v)}
                         minH={130}
                         maxH={300}
@@ -1036,7 +1204,7 @@ export const WorldviewPanel: React.FC<Props> = ({
                       <textarea
                         className="w-full bg-[var(--bg-dark)] border border-[var(--border)] rounded px-3 py-2 text-sm min-h-[150px] max-h-[300px] overflow-y-auto resize-y focus:border-[var(--primary)] transition-colors pr-16"
                         placeholder="其他需要记录的世界观设定..."
-                        value={data.备注}
+                        value={data.备注 ?? ''}
                         onChange={e => update('备注', e.target.value)}
                         style={{ fontSize: 字体大小['备注'] || 14 }}
                       />
@@ -1103,33 +1271,53 @@ export const WorldviewPanel: React.FC<Props> = ({
                 </button>
               </div>
               <div className="p-4 space-y-2 max-h-[300px] overflow-y-auto">
-                <div className="flex items-center justify-between p-3 rounded-lg bg-[var(--bg-dark)] hover:bg-[var(--bg-darker)] cursor-pointer border border-[var(--border)]">
-                  <div>
-                    <p className="text-sm">当前版本</p>
-                    <p className="text-xs text-[var(--text-muted)]">
-                      最近保存: {lastSavedAt ?? '未保存'}
-                    </p>
+                {版本历史.length === 0 && (
+                  <p className="text-sm text-[var(--text-muted)] text-center py-4">
+                    暂无版本历史
+                  </p>
+                )}
+                {版本历史.map((ver, idx) => (
+                  <div
+                    key={ver.id}
+                    className="flex items-center justify-between p-3 rounded-lg bg-[var(--bg-dark)] hover:bg-[var(--bg-darker)] cursor-pointer border border-[var(--border)]"
+                  >
+                    <div>
+                      <p className="text-sm">{ver.描述 || `版本 ${idx + 1}`}</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        {ver.时间}
+                      </p>
+                    </div>
+                    {idx === 当前版本索引 ? (
+                      <span className="text-xs text-purple-400">当前</span>
+                    ) : (
+                      <button
+                        className="text-xs text-[var(--text-secondary)] hover:text-purple-400"
+                        onClick={() => {
+                          if (ver.内容) {
+                            pushUndo();
+                            const fields: Record<string, string> = {};
+                            for (const [k, v] of Object.entries(ver.内容)) {
+                              if (typeof v === 'string') fields[k] = v;
+                            }
+                            setData(fields);
+                            set当前版本索引(idx);
+                            if (projectId) {
+                              fetch(
+                                `${API_BASE}/api/worldviews/project/${projectId}/versions/${ver.id}/rollback`,
+                                {
+                                  method: 'POST',
+                                  headers: getAuthHeaders(),
+                                }
+                              ).catch(() => {});
+                            }
+                          }
+                        }}
+                      >
+                        恢复
+                      </button>
+                    )}
                   </div>
-                  <span className="text-xs text-purple-400">当前</span>
-                </div>
-                <div className="flex items-center justify-between p-3 rounded-lg bg-[var(--bg-dark)] hover:bg-[var(--bg-darker)] cursor-pointer border border-[var(--border)]">
-                  <div>
-                    <p className="text-sm">版本 2</p>
-                    <p className="text-xs text-[var(--text-muted)]">2小时前</p>
-                  </div>
-                  <button className="text-xs text-[var(--text-secondary)] hover:text-purple-400">
-                    恢复
-                  </button>
-                </div>
-                <div className="flex items-center justify-between p-3 rounded-lg bg-[var(--bg-dark)] hover:bg-[var(--bg-darker)] cursor-pointer border border-[var(--border)]">
-                  <div>
-                    <p className="text-sm">版本 1</p>
-                    <p className="text-xs text-[var(--text-muted)]">昨天</p>
-                  </div>
-                  <button className="text-xs text-[var(--text-secondary)] hover:text-purple-400">
-                    恢复
-                  </button>
-                </div>
+                ))}
               </div>
             </div>
           </div>,
@@ -1159,20 +1347,60 @@ export const WorldviewPanel: React.FC<Props> = ({
                 </button>
               </div>
               <div className="p-4 space-y-2 max-h-[300px] overflow-y-auto">
-                {[].map((item, i) => (
+                {生成历史.length === 0 && (
+                  <p className="text-sm text-[var(--text-muted)] text-center py-4">
+                    暂无生成历史
+                  </p>
+                )}
+                {生成历史.map(gen => (
                   <div
-                    key={i}
+                    key={gen.id}
                     className="flex items-center justify-between p-3 rounded-lg bg-[var(--bg-dark)] border border-[var(--border)]"
                   >
                     <div>
-                      <p className="text-sm">{item}</p>
+                      <p className="text-sm">
+                        {gen.生成类型 === 'full'
+                          ? '全量生成'
+                          : `字段生成: ${Object.keys(gen.生成内容 || {}).join(', ')}`}
+                      </p>
                       <p className="text-xs text-[var(--text-muted)]">
-                        {i + 1}天前
+                        {gen.时间}
                       </p>
                     </div>
-                    <button className="text-xs text-[var(--text-secondary)] hover:text-purple-400">
-                      查看
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {gen.已采用 && (
+                        <span className="text-xs text-green-400">已采用</span>
+                      )}
+                      <button
+                        className="text-xs text-[var(--text-secondary)] hover:text-purple-400"
+                        onClick={async () => {
+                          pushUndo();
+                          const merged = { ...data };
+                          Object.keys(gen.生成内容 || {}).forEach(k => {
+                            if (k !== '_历法数据') merged[k] = gen.生成内容[k];
+                          });
+                          setData(merged);
+                          if (projectId) {
+                            await adoptGeneration(
+                              'worldviews',
+                              projectId,
+                              gen.id
+                            ).catch(() => {});
+                            saveData('worldviews', projectId, merged).catch(
+                              () => {}
+                            );
+                          }
+                          set生成历史(prev =>
+                            prev.map(g =>
+                              g.id === gen.id ? { ...g, 已采用: true } : g
+                            )
+                          );
+                          setShowGenHistory(false);
+                        }}
+                      >
+                        {gen.已采用 ? '重新采用' : '采用'}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1216,10 +1444,6 @@ export const WorldviewPanel: React.FC<Props> = ({
                 <h4 className="text-sm font-medium mt-3">核心规则</h4>
                 <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap">
                   {data.核心规则}
-                </p>
-                <h4 className="text-sm font-medium mt-3">修炼体系</h4>
-                <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap">
-                  {data.修炼体系}
                 </p>
               </div>
             </div>
@@ -2305,65 +2529,6 @@ function EditDetailPanel({
                     rows={5}
                     onAIGenerate={() => onAIGenerateField?.('势力格局')}
                   />
-                  <EditField
-                    label="阶级矛盾"
-                    field="阶级矛盾"
-                    data={data}
-                    update={update}
-                    字体大小={字体大小}
-                    adjustFontSize={adjustFontSize}
-                    rows={4}
-                    onAIGenerate={() => onAIGenerateField?.('阶级矛盾')}
-                  />
-                </EditCard>
-              )}
-
-              {activeTab === 'power' && (
-                <EditCard
-                  title="修炼体系"
-                  icon="ri-focus-3-line"
-                  iconColor="text-blue-400"
-                >
-                  <EditField
-                    label="境界划分"
-                    field="修炼体系"
-                    data={data}
-                    update={update}
-                    字体大小={字体大小}
-                    adjustFontSize={adjustFontSize}
-                    rows={8}
-                    onAIGenerate={() => onAIGenerateField?.('修炼体系')}
-                  />
-                  <EditField
-                    label="天道法则"
-                    field="天道法则"
-                    data={data}
-                    update={update}
-                    字体大小={字体大小}
-                    adjustFontSize={adjustFontSize}
-                    rows={6}
-                    onAIGenerate={() => onAIGenerateField?.('天道法则')}
-                  />
-                  <EditField
-                    label="天地灵气"
-                    field="天地灵气"
-                    data={data}
-                    update={update}
-                    字体大小={字体大小}
-                    adjustFontSize={adjustFontSize}
-                    rows={6}
-                    onAIGenerate={() => onAIGenerateField?.('天地灵气')}
-                  />
-                  <EditField
-                    label="境界压制"
-                    field="境界压制"
-                    data={data}
-                    update={update}
-                    字体大小={字体大小}
-                    adjustFontSize={adjustFontSize}
-                    rows={5}
-                    onAIGenerate={() => onAIGenerateField?.('境界压制')}
-                  />
                 </EditCard>
               )}
 
@@ -2384,24 +2549,14 @@ function EditDetailPanel({
                     onAIGenerate={() => onAIGenerateField?.('历史背景')}
                   />
                   <EditField
-                    label="核心矛盾"
-                    field="核心矛盾"
+                    label="主要冲突"
+                    field="主要冲突"
                     data={data}
                     update={update}
                     字体大小={字体大小}
                     adjustFontSize={adjustFontSize}
                     rows={5}
-                    onAIGenerate={() => onAIGenerateField?.('核心矛盾')}
-                  />
-                  <EditField
-                    label="种族矛盾"
-                    field="种族矛盾"
-                    data={data}
-                    update={update}
-                    字体大小={字体大小}
-                    adjustFontSize={adjustFontSize}
-                    rows={5}
-                    onAIGenerate={() => onAIGenerateField?.('种族矛盾')}
+                    onAIGenerate={() => onAIGenerateField?.('主要冲突')}
                   />
                 </EditCard>
               )}

@@ -24,7 +24,7 @@ import {
   getTypeById,
   LEVEL_COLORS,
 } from './geomap-constants';
-import type { 画布节点, 连线数据 } from './geomap-constants';
+import type { 画布节点, 连线数据, MapId } from './geomap-constants';
 import {
   layoutHierarchical,
   layoutSubtree,
@@ -91,23 +91,23 @@ interface GeoMapCanvasProps {
   连线列表: 连线数据[];
   规划路线连线列表?: 连线数据[];
   已经历路线连线列表?: 连线数据[];
-  选中节点ID: number | null;
+  选中节点ID: MapId | null;
   选中连线ID: string | null;
-  on节点移动: (id: number, x: number, y: number) => void;
+  on节点移动: (id: MapId, x: number, y: number) => void;
   on节点添加: (x: number, y: number) => void;
-  on节点删除: (id: number) => void;
-  on连线创建: (fromId: number, toId: number) => void;
+  on节点删除: (id: MapId) => void;
+  on连线创建: (fromId: MapId, toId: MapId) => void;
   on连线删除: (id: string) => void;
-  on父节点变更: (id: number, parentId: number | null) => void;
-  on选中节点ID变更: (id: number | null) => void;
+  on父节点变更: (id: MapId, parentId: MapId | null) => void;
+  on选中节点ID变更: (id: MapId | null) => void;
   on选中连线ID变更: (id: string | null) => void;
-  节点颜色映射?: Map<number, string>;
+  节点颜色映射?: Map<MapId, string>;
 }
 
 export interface GeoMapCanvasRef {
   适配全景: () => void;
   重新布局: (mode: string) => void;
-  重新布局子树: (nodeId: number) => void;
+  重新布局子树: (nodeId: MapId) => void;
   更新画布尺寸: () => void;
   绘制所有连线: () => void;
   设置布局模式: (mode: string) => void;
@@ -154,9 +154,9 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
 
     // Source: K = position overrides (line 139198), reactive for node rendering
     const [positions, setPositions] = useState<
-      Record<number, { x: number; y: number }>
+      Record<MapId, { x: number; y: number }>
     >({});
-    const K = useRef<Record<number, { x: number; y: number }>>({});
+    const K = useRef<Record<MapId, { x: number; y: number }>>({});
 
     // Source: C = interaction mode (line 139191), null | 'pan' | 'drag-node' | 'connect'
     const modeRef = useRef<string | null>(null);
@@ -174,16 +174,16 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
     const panStartRef = useRef({ x: 0, y: 0 });
 
     // Source: H = connect-from node id (line 139196)
-    const connectFromRef = useRef<number | null>(null);
+    const connectFromRef = useRef<MapId | null>(null);
 
     // Source: B = connect mouse pos relative to container (line 139197)
     const connectMouseRef = useRef({ x: 0, y: 0 });
 
     // Source: ie = child node ids being dragged with parent (line 139200)
-    const childDragIds = useRef<number[]>([]);
+    const childDragIds = useRef<MapId[]>([]);
 
     // Source: fe = original positions of child nodes (line 139201)
-    const childDragOrigPos = useRef<Record<number, { x: number; y: number }>>(
+    const childDragOrigPos = useRef<Record<MapId, { x: number; y: number }>>(
       {}
     );
 
@@ -191,7 +191,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
     const [contextMenu, setContextMenu] = useState<{
       x: number;
       y: number;
-      nodeId: number;
+      nodeId: MapId;
     } | null>(null);
     const [saveHint, setSaveHint] = useState('');
     const [layoutMode, setLayoutMode] = useState<'层级' | '网络'>('层级');
@@ -228,12 +228,12 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
     // Source: ke (line 139219) — computed node list with position overrides applied
     const resolvedNodes = useMemo(() => {
       return 节点列表.map(n => {
-        const id = Number(n.id);
+        const id = n.id;
         const override = K.current[id];
         return {
           ...n,
           id,
-          父地图ID: n.父地图ID ? Number(n.父地图ID) : null,
+          父地图ID: n.父地图ID ? n.父地图ID : null,
           x: override ? override.x : n.x != null ? Number(n.x) : 0,
           y: override ? override.y : n.y != null ? Number(n.y) : 0,
         };
@@ -242,18 +242,18 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
 
     // Source: ae (line 139250) — node id -> node map
     const nodeMap = useMemo(() => {
-      const map = new Map<number, any>();
-      for (const n of resolvedNodes) map.set(Number(n.id), n);
+      const map = new Map<MapId, any>();
+      for (const n of resolvedNodes) map.set(n.id, n);
       return map;
     }, [resolvedNodes]);
 
     // Source: he (line 139239) — parent color mapping
     const parentColorMap = useMemo(() => {
-      const parentIds = new Set<number>();
+      const parentIds = new Set<MapId>();
       for (const n of resolvedNodes) {
-        if (n.父地图ID) parentIds.add(Number(n.父地图ID));
+        if (n.父地图ID) parentIds.add(n.父地图ID);
       }
-      const map = new Map<number, string>();
+      const map = new Map<MapId, string>();
       let ci = 0;
       for (const pid of parentIds) {
         map.set(pid, PARENT_COLORS[ci % PARENT_COLORS.length]);
@@ -273,7 +273,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
     // Source: Ve (line 139307-139313) — node center-bottom in screen coords
     const nodeScreenPos = useCallback(
       (node: any) => {
-        const override = K.current[Number(node.id)];
+        const override = K.current[node.id];
         const x = override ? override.x : node.x;
         const y = override ? override.y : node.y;
         return contentToScreen(x + GV / 2, y + XV + 2);
@@ -283,13 +283,13 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
 
     // Source: J (line 139282) — collect all descendant ids
     const getDescendantIds = useCallback(
-      (nodeId: number) => {
-        const result: number[] = [];
-        function collect(pid: number) {
+      (nodeId: MapId) => {
+        const result: MapId[] = [];
+        function collect(pid: MapId) {
           for (const n of resolvedNodes) {
-            if (Number(n.父地图ID) === Number(pid)) {
-              result.push(Number(n.id));
-              collect(Number(n.id));
+            if (n.父地图ID === pid) {
+              result.push(n.id);
+              collect(n.id);
             }
           }
         }
@@ -357,9 +357,9 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
 
     // Resolve node positions directly from K.current (always up-to-date, bypasses React render cycle)
     const resolveNodePos = useCallback(
-      (nodeId: number) => {
-        const n = 节点列表.find(n => Number(n.id) === Number(nodeId));
-        const override = K.current[Number(nodeId)];
+      (nodeId: MapId) => {
+        const n = 节点列表.find(n => n.id === nodeId);
+        const override = K.current[nodeId];
         return {
           x: override ? override.x : n ? (n.x != null ? Number(n.x) : 0) : 0,
           y: override ? override.y : n ? (n.y != null ? Number(n.y) : 0) : 0,
@@ -388,10 +388,10 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
       const bgCard = cs.getPropertyValue('--bg-card').trim() || '#1e293b';
 
       const settings = lineSettings;
-      const allNodeIds = new Set(节点列表.map(n => Number(n.id)));
+      const allNodeIds = new Set(节点列表.map(n => n.id));
 
       // Helper: screen pos for a node id (reads K.current directly)
-      const scrPos = (nid: number) => {
+      const scrPos = (nid: MapId) => {
         const p = resolveNodePos(nid);
         return contentToScreen(p.x + GV / 2, p.y + XV + 2);
       };
@@ -403,9 +403,9 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
         const pcDash = LINE_STYLE_DASH[pcSettings.线型] || [5, 4];
         for (const node of 节点列表) {
           if (!node.父地图ID) continue;
-          if (!allNodeIds.has(Number(node.父地图ID))) continue;
-          const from = scrPos(Number(node.父地图ID));
-          const to = scrPos(Number(node.id));
+          if (!allNodeIds.has(node.父地图ID)) continue;
+          const from = scrPos(node.父地图ID);
+          const to = scrPos(node.id);
           ctx.save();
           ctx.shadowColor = pcColor + '4D';
           ctx.shadowBlur = 4;
@@ -443,21 +443,18 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
 
       // 2. Hit connections — Source: xt line 139586-139631
       for (const conn of 连线列表) {
-        if (
-          !allNodeIds.has(Number(conn.起点ID)) ||
-          !allNodeIds.has(Number(conn.终点ID))
-        )
+        if (!allNodeIds.has(conn.起点ID) || !allNodeIds.has(conn.终点ID))
           continue;
         const typeDef =
           CONNECTION_TYPES.find(t => t.id === conn.连线类型) ||
           CONNECTION_TYPES[0];
         const color = conn.连线颜色 || typeDef.color;
-        const from = scrPos(Number(conn.起点ID));
-        const to = scrPos(Number(conn.终点ID));
+        const from = scrPos(conn.起点ID);
+        const to = scrPos(conn.终点ID);
         const isSelected =
-          Number(选中节点ID) === Number(conn.起点ID) ||
-          Number(选中节点ID) === Number(conn.终点ID) ||
-          Number(选中连线ID) === Number(conn.id);
+          选中节点ID === conn.起点ID ||
+          选中节点ID === conn.终点ID ||
+          选中连线ID === conn.id;
 
         ctx.save();
         ctx.beginPath();
@@ -467,7 +464,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
         ctx.lineWidth = isSelected ? typeDef.width * 2 : typeDef.width;
         ctx.setLineDash(typeDef.dash as number[]);
         ctx.lineCap = 'round';
-        if (isSelected && Number(选中连线ID) === Number(conn.id)) {
+        if (isSelected && 选中连线ID === conn.id) {
           ctx.shadowColor = color;
           ctx.shadowBlur = 8;
         }
@@ -508,13 +505,10 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
         }
       ) => {
         for (const rc of connections) {
-          if (
-            !allNodeIds.has(Number(rc.起点ID)) ||
-            !allNodeIds.has(Number(rc.终点ID))
-          )
+          if (!allNodeIds.has(rc.起点ID) || !allNodeIds.has(rc.终点ID))
             continue;
-          const from = scrPos(Number(rc.起点ID));
-          const to = scrPos(Number(rc.终点ID));
+          const from = scrPos(rc.起点ID);
+          const to = scrPos(rc.终点ID);
           ctx.save();
           ctx.beginPath();
           ctx.moveTo(from.x, from.y);
@@ -659,10 +653,10 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
       ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
 
       const settings = lineSettings;
-      const allNodeIds = new Set(节点列表.map(n => Number(n.id)));
+      const allNodeIds = new Set(节点列表.map(n => n.id));
 
       // Helper: screen pos for node id
-      const scrPos = (nid: number) => {
+      const scrPos = (nid: MapId) => {
         const p = resolveNodePos(nid);
         return contentToScreen(p.x + GV / 2, p.y + XV + 2);
       };
@@ -676,16 +670,13 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
         if (connections.length === 0) return;
         if (state.当前段 >= connections.length) state.当前段 = 0;
         const conn = connections[state.当前段];
-        if (
-          !allNodeIds.has(Number(conn.起点ID)) ||
-          !allNodeIds.has(Number(conn.终点ID))
-        ) {
+        if (!allNodeIds.has(conn.起点ID) || !allNodeIds.has(conn.终点ID)) {
           state.当前段 = (state.当前段 + 1) % connections.length;
           state.进度 = 0;
           return;
         }
-        const from = scrPos(Number(conn.起点ID));
-        const to = scrPos(Number(conn.终点ID));
+        const from = scrPos(conn.起点ID);
+        const to = scrPos(conn.终点ID);
         const dx = to.x - from.x;
         const dy = to.y - from.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -852,7 +843,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
         maxX = -Infinity,
         maxY = -Infinity;
       for (const n of 节点列表) {
-        const p = resolveNodePos(Number(n.id));
+        const p = resolveNodePos(n.id);
         if (p.x < minX) minX = p.x;
         if (p.y < minY) minY = p.y;
         if (p.x + GV > maxX) maxX = p.x + GV;
@@ -888,11 +879,11 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
         if (!rect || rect.width === 0 || rect.height === 0) return;
         // Build layout data from props + K.current overrides
         const dataForLayout = 节点列表.map(n => {
-          const override = K.current[Number(n.id)];
+          const override = K.current[n.id];
           return {
             ...n,
-            id: Number(n.id),
-            父地图ID: n.父地图ID ? Number(n.父地图ID) : null,
+            id: n.id,
+            父地图ID: n.父地图ID ? n.父地图ID : null,
             x: override ? override.x : n.x != null ? Number(n.x) : 0,
             y: override ? override.y : n.y != null ? Number(n.y) : 0,
           };
@@ -908,7 +899,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
           for (const n of dataForLayout) {
             if (n.父地图ID) edges.push({ from: n.父地图ID, to: n.id });
           }
-          result = refineLayout(initial, dataForLayout as any, edges);
+          result = refineLayout(initial, dataForLayout as any, edges as any);
         } else {
           result = layoutHierarchical(dataForLayout as any, {
             宽: rect.width,
@@ -916,7 +907,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
           });
         }
 
-        const newPos: Record<number, { x: number; y: number }> = {};
+        const newPos: Record<MapId, { x: number; y: number }> = {};
         for (const [id, p] of result) {
           newPos[id] = p;
           K.current[id] = p;
@@ -933,12 +924,12 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
     );
 
     const applySubtreeLayout = useCallback(
-      (nodeId: number) => {
-        const nodeData = 节点列表.find(n => Number(n.id) === nodeId);
+      (nodeId: MapId) => {
+        const nodeData = 节点列表.find(n => n.id === nodeId);
         if (!nodeData) return;
         const override = K.current[nodeId];
-        const subtreeIds = new Set<number>();
-        const collect = (pid: number) => {
+        const subtreeIds = new Set<MapId>();
+        const collect = (pid: MapId) => {
           节点列表
             .filter(n => n.父地图ID === pid)
             .forEach(c => {
@@ -956,11 +947,11 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
         };
         const result = layoutSubtree(
           nodeWithPos as any,
-          subtreeIds,
+          subtreeIds as any,
           节点列表 as any
         );
         for (const [id, p] of result) K.current[id] = p;
-        const newPos: Record<number, { x: number; y: number }> = {};
+        const newPos: Record<MapId, { x: number; y: number }> = {};
         for (const [id, p] of result) newPos[id] = p;
         setPositions(prev => ({ ...prev, ...newPos }));
         for (const [id, p] of result) on节点移动(id, p.x, p.y);
@@ -1004,11 +995,11 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
       let hasNewNodes = false;
       let hasNonZero = false;
       for (const n of 节点列表) {
-        if (K.current[Number(n.id)] === undefined) {
+        if (K.current[n.id] === undefined) {
           hasNewNodes = true;
           const nx = Number(n.x) || 0;
           const ny = Number(n.y) || 0;
-          K.current[Number(n.id)] = { x: nx, y: ny };
+          K.current[n.id] = { x: nx, y: ny };
           if (nx !== 0 || ny !== 0) hasNonZero = true;
         }
       }
@@ -1247,10 +1238,9 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
             if (targetId && targetId !== connectFromRef.current) {
               const exists = 连线列表.some(
                 c =>
-                  (Number(c.起点ID) === Number(connectFromRef.current) &&
-                    Number(c.终点ID) === Number(targetId)) ||
-                  (Number(c.起点ID) === Number(targetId) &&
-                    Number(c.终点ID) === Number(connectFromRef.current))
+                  (c.起点ID === connectFromRef.current &&
+                    c.终点ID === targetId) ||
+                  (c.起点ID === targetId && c.终点ID === connectFromRef.current)
               );
               if (!exists) on连线创建(connectFromRef.current, targetId);
             }
@@ -1312,7 +1302,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
 
     // Source: et (line 139727) — node mousedown
     const handleNodeMouseDown = useCallback(
-      (e: React.MouseEvent, nodeId: number) => {
+      (e: React.MouseEvent, nodeId: MapId) => {
         if ((e.target as HTMLElement).closest('.锚点')) return;
         e.preventDefault();
         on选中节点ID变更(nodeId);
@@ -1347,7 +1337,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
 
     // Source: Xe (line 139751) — anchor mousedown
     const handleAnchorMouseDown = useCallback(
-      (e: React.MouseEvent, nodeId: number) => {
+      (e: React.MouseEvent, nodeId: MapId) => {
         e.preventDefault();
         e.stopPropagation();
         connectFromRef.current = nodeId;
@@ -1366,7 +1356,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
     );
 
     const handleNodeContextMenu = useCallback(
-      (e: React.MouseEvent, nodeId: number) => {
+      (e: React.MouseEvent, nodeId: MapId) => {
         e.preventDefault();
         e.stopPropagation();
         setContextMenu({ x: e.clientX, y: e.clientY, nodeId });
@@ -1398,7 +1388,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
 
     // ── Save/load layout ──
     const saveLayout = useCallback(() => {
-      const data: Record<number, { x: number; y: number }> = {};
+      const data: Record<MapId, { x: number; y: number }> = {};
       for (const n of resolvedNodes) data[n.id] = { x: n.x, y: n.y };
       localStorage.setItem('geomap_node_layout', JSON.stringify(data));
       setSaveHint('布局已保存');
@@ -1412,8 +1402,8 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
           const data = JSON.parse(saved);
           for (const [idStr, pos] of Object.entries(data)) {
             const p = pos as { x: number; y: number };
-            K.current[Number(idStr)] = p;
-            on节点移动(Number(idStr), p.x, p.y);
+            K.current[idStr] = p;
+            on节点移动(idStr, p.x, p.y);
           }
           setPositions({ ...K.current });
           setSaveHint('布局已加载');
@@ -1466,7 +1456,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
     }, []);
 
     const getChildCount = useCallback(
-      (id: number) => {
+      (id: MapId) => {
         return 节点列表.filter(n => n.父地图ID === id).length;
       },
       [节点列表]
@@ -1478,7 +1468,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
     // Source: Y (line 139261-139274) — node style
     const getNodeStyle = useCallback(
       (node: any): React.CSSProperties => {
-        const pc = parentColorMap.get(Number(node.id));
+        const pc = parentColorMap.get(node.id);
         const t = `translate3d(${node.x}px, ${node.y}px, 0)`;
         if (pc) {
           return {
@@ -1524,7 +1514,7 @@ export const GeoMapCanvas = forwardRef<GeoMapCanvasRef, GeoMapCanvasProps>(
           }}
         >
           {resolvedNodes.map(node => {
-            const isSelected = Number(node.id) === Number(选中节点ID);
+            const isSelected = node.id === 选中节点ID;
             const childCount = getChildCount(node.id);
             const icon = getNodeIcon(node);
             const typeLabel = getNodeLabel(node);

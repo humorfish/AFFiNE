@@ -83,19 +83,19 @@ function buildSubMapPrompt(
   let taskDesc = '';
   switch (childLevel) {
     case '大陆':
-      taskDesc = `为"${parentName}"世界生成${config.最小}-${config.最大}个大陆`;
+      taskDesc = `为"${parentName}"世界生成${config.最小}-${config.最大}个大陆，每个大陆要有独特的地理特征和文化背景`;
       break;
     case '区域':
-      taskDesc = `为"${parentName}"大陆生成${config.最小}-${config.最大}个区域`;
+      taskDesc = `为"${parentName}"大陆生成${config.最小}-${config.最大}个区域或国家，体现不同的政治势力和文化特色`;
       break;
     case '城市':
-      taskDesc = `为"${parentName}"区域生成${config.最小}-${config.最大}个城市`;
+      taskDesc = `为"${parentName}"区域生成${config.最小}-${config.最大}个城市或聚居点，包括首都、商业中心、军事要塞等不同类型`;
       break;
     case '地点':
-      taskDesc = `为"${parentName}"城市生成${config.最小}-${config.最大}个重要地点`;
+      taskDesc = `为"${parentName}"城市生成${config.最小}-${config.最大}个重要地点，如学院、酒馆、官府、神殿、市集、秘境等`;
       break;
     case '路线':
-      taskDesc = `为"${parentName}"生成${config.最小}-${config.最大}条重要路线`;
+      taskDesc = `为"${parentName}"生成${config.最小}-${config.最大}条重要路线，每条路线必须明确指定起点和终点，连接区域内的重要地点`;
       break;
     default:
       taskDesc = `生成${config.最小}-${config.最大}个子地图`;
@@ -109,8 +109,10 @@ function buildSubMapPrompt(
     example = 'R|龙脊商道|龙脊城|余烬镇|穿越山脉的繁忙商道';
   } else if (includeRoutes) {
     pipeFormat = 'M|地图名称|地图描述\nR|路线名称|起点|终点|描述';
-    example =
-      'M|东方大陆|神秘的古老大陆\nR|丝路商道|东方大陆|西域荒漠|古老商路';
+    example = `M|东方大陆|神秘的古老大陆，灵气充沛
+M|西域荒漠|荒凉的沙漠地带，隐藏着古老遗迹
+R|丝路商道|东方大陆|西域荒漠|横贯大陆的古老商路
+R|幽谷暗径|东方大陆|西域荒漠|穿越幽暗峡谷的隐秘通道`;
   } else {
     pipeFormat = 'M|地图名称|地图描述';
     example = 'M|东方大陆|神秘的古老大陆';
@@ -166,30 +168,43 @@ function buildRoutePrompt(
     banBlock = `\n⚠️ 以下名称已存在：\n${names.join('、')}`;
   }
   const locNames = selectedLocations.map(l => l.地图名称);
+  const locDescs = selectedLocations
+    .map(l => {
+      let s = l.地图名称;
+      if (l.地图描述) s += `（${l.地图描述.substring(0, 20)}）`;
+      return s;
+    })
+    .join('、');
   const maxRoutes = Math.max(2, Math.min(selectedLocations.length * 2, 10));
   const minRoutes = Math.ceil(maxRoutes / 2);
   return `你是一位专业的小说地理地图设计师，擅长设计地点之间的路线和交通网络。
 ${worldviewStr ? '\n当前世界观信息：\n' + worldviewStr : ''}${banBlock}
 
 当前任务：为以下地点生成连接路线
-所在地图：${parent?.地图名称 || '世界'}
-可用地点：${locNames.join('、')}
+所在地图：${parent?.地图名称 || '世界'}（${parent?.地图类型 || '世界'}）
+可用地点：${locDescs}
 
-【输出格式】R|路线名称|起点|终点|描述
+【输出格式】（极简格式，节省token）
+R|路线名称|起点|终点|描述
 
 【核心要求】
 - 生成${minRoutes}-${maxRoutes}条有意义的路线
 - 起点和终点必须从以下名称中选择：${locNames.join('、')}
-- 路线名称要有特色，5字以内
+- 路线名称要有特色，符合世界观风格，5字以内
 - 描述简洁具体，5字以内
+- 路线应该合理连接地理上相关的地点
+- 可以有商道、秘径、官道、水路、航线等多种类型
+- ⚠️ 路线名称不能与已有名称重复
 
 【输出示例】
 R|龙脊商道|龙脊城|余烬镇|繁忙的商道
+R|秘境小径|天山城|幽谷秘境|隐秘的山路
+R|碧波航线|港口|海岛|近海航线
 
 【重要规则】
 1. 严格按格式输出，每行一条路线
-2. 不要输出任何其他内容
-3. 起点和终点只能使用上面给出的地点名称`;
+2. 不要输出任何其他内容（如解释、代码块标记等）
+3. 起点和终点只能使用上面给出的地点名称，不得自创`;
 }
 
 function buildWorldMapPrompt(
@@ -315,18 +330,30 @@ function parseSubMapResponse(text: string): {
   错误信息: string | null;
 } {
   if (!text) return { 成功: false, 错误信息: '内容为空', 数据: null };
-  const cleaned = text.replace(/^﻿/, '').trim();
+  const cleaned = text
+    .replace(/^﻿/, '')
+    .replace(/[​-‏­]/g, '') // zero-width chars
+    .replace(/[\x00-\x1f]/g, char =>
+      char === '\n' || char === '\r' || char === '\t' ? char : ''
+    ) // control chars except whitespace
+    .trim();
   const pipe = parseSubMapPipe(cleaned);
   if (pipe.成功) return { ...pipe, 错误信息: null };
   try {
     const json = JSON.parse(cleaned);
-    if (json?.子地图列表) return { 成功: true, 数据: json, 错误信息: null };
+    if (json?.子地图列表 && Array.isArray(json.子地图列表))
+      return { 成功: true, 数据: json, 错误信息: null };
+    if (json?.地图名称 && json?.大陆列表 && Array.isArray(json.大陆列表))
+      return { 成功: true, 数据: json, 错误信息: null };
   } catch {}
   const braceMatch = cleaned.match(/\{[\s\S]*\}/);
   if (braceMatch)
     try {
       const json = JSON.parse(braceMatch[0]);
-      if (json?.子地图列表) return { 成功: true, 数据: json, 错误信息: null };
+      if (json?.子地图列表 && Array.isArray(json.子地图列表))
+        return { 成功: true, 数据: json, 错误信息: null };
+      if (json?.地图名称 && json?.大陆列表 && Array.isArray(json.大陆列表))
+        return { 成功: true, 数据: json, 错误信息: null };
     } catch {}
   return { 成功: false, 错误信息: '解析失败，请重试', 数据: null };
 }
@@ -365,10 +392,32 @@ function parseWorldMapResponse(text: string): {
 } {
   if (!text || !text.trim())
     return { 成功: false, 错误信息: '内容为空', 数据: null };
-  const lines = text.split('\n').filter(l => l.trim());
+  const cleaned = text
+    .replace(/^﻿/, '')
+    .replace(/[​-‏­]/g, '')
+    .trim();
+  const lines = cleaned.split('\n').filter(l => l.trim());
   const worldLine = lines.find(l => l.trim().startsWith('W|'));
-  if (!worldLine)
+  if (!worldLine) {
+    // JSON format fallback — source: Vue It() lines 12495-12516
+    try {
+      const json = JSON.parse(cleaned);
+      if (json?.地图名称 && json?.大陆列表 && Array.isArray(json.大陆列表)) {
+        return { 成功: true, 数据: json as 世界地图生成结果, 错误信息: null };
+      }
+    } catch {}
+    // Try extracting JSON from text
+    const braceMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (braceMatch) {
+      try {
+        const json = JSON.parse(braceMatch[0]);
+        if (json?.地图名称 && json?.大陆列表 && Array.isArray(json.大陆列表)) {
+          return { 成功: true, 数据: json as 世界地图生成结果, 错误信息: null };
+        }
+      } catch {}
+    }
     return { 成功: false, 错误信息: '未找到世界级地图', 数据: null };
+  }
   const worldParts = worldLine.trim().substring(2).split('|');
   const world: 世界地图生成结果 = {
     地图名称: worldParts[0]?.trim() || '未命名世界',
@@ -559,6 +608,55 @@ export const GeoMapPanel: React.FC<Props> = ({
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [projectId]);
+
+  // ── Load generation history from backend ──
+  const loadHistory = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const r = await fetch(
+        `${API_BASE}/api/geo-maps/project/${projectId}/generations`,
+        { headers: getAuthHeaders() }
+      );
+      const res = await r.json();
+      if (res.success && Array.isArray(res.data)) {
+        setGenHistory(
+          res.data.map((g: any) => ({
+            id: g.id,
+            时间: g.创建时间 || g.createdAt || '',
+            提示词: g.提示词 || '',
+            已采用: g.已采用 || false,
+            生成内容: g.生成内容 || {},
+            父地图ID: g.地图ID || null,
+          }))
+        );
+      }
+    } catch {}
+  }, [projectId]);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  // ── Batch update visits ──
+  const batchUpdateVisits = useCallback(
+    async (mapIds: MapId[]) => {
+      if (!projectId || mapIds.length === 0) return;
+      try {
+        await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/visits/batch`,
+          {
+            method: 'POST',
+            headers: {
+              ...getAuthHeaders(),
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ 地图ID列表: mapIds }),
+          }
+        );
+      } catch {}
+    },
+    [projectId]
+  );
 
   // Sync edit form on selection
   useEffect(() => {
@@ -879,12 +977,19 @@ export const GeoMapPanel: React.FC<Props> = ({
   // ── Tree ──
   const toggleExpand = useCallback(
     (id: MapId) =>
-      set展开状态(prev => ({
-        ...prev,
-        [String(id)]:
-          prev[String(id)] === undefined ? false : !prev[String(id)],
-      })),
-    []
+      set展开状态(prev => {
+        const newState = {
+          ...prev,
+          [String(id)]:
+            prev[String(id)] === undefined ? false : !prev[String(id)],
+        };
+        // Track visit when expanding (not collapsing)
+        if (newState[String(id)]) {
+          batchUpdateVisits([id]);
+        }
+        return newState;
+      }),
+    [batchUpdateVisits]
   );
   const expandAll = useCallback(
     () => set展开集合(new Set(地图列表.map(m => m.id))),
@@ -991,6 +1096,47 @@ export const GeoMapPanel: React.FC<Props> = ({
   }, [自定义类型名, 自定义类型图标, customTypes, projectId, 编辑表单]);
 
   // ── AI Generation ──
+  const saveGeneration = useCallback(
+    async (
+      genData: any,
+      mode: AIMode,
+      parentId: MapId | null,
+      worldview: Record<string, string> | null,
+      promptText: string
+    ): Promise<number | null> => {
+      if (!projectId) return null;
+      try {
+        const gr = await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/generations`,
+          {
+            method: 'POST',
+            headers: {
+              ...getAuthHeaders(),
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+              提示词: promptText || '',
+              世界观信息: worldview || {},
+              生成内容: genData?.数据 || {},
+              生成类型:
+                mode === 'world'
+                  ? 'world'
+                  : mode === 'route'
+                    ? 'route'
+                    : 'hierarchy',
+              地图ID: parentId,
+            }),
+          }
+        );
+        const gRes = await gr.json();
+        return gRes.success && gRes.data?.id ? gRes.data.id : null;
+      } catch {
+        return null;
+      }
+    },
+    [projectId]
+  );
+
   const openAIDialog = useCallback((mode: AIMode) => {
     setAiMode(mode);
     setAiPrompt('');
@@ -1006,6 +1152,24 @@ export const GeoMapPanel: React.FC<Props> = ({
     setGenError('');
     setGenResult(null);
     abortRef.current = new AbortController();
+
+    // Fetch worldview for all prompt builders (source: tl.getWorldview)
+    let worldview: Record<string, string> | null = null;
+    try {
+      const wvRes = await fetch(
+        `${API_BASE}/api/geo-maps/project/${projectId}/worldview`,
+        { headers: getAuthHeaders() }
+      );
+      const wvData = await wvRes.json();
+      if (wvData.success && wvData.data) {
+        const fields: Record<string, string> = {};
+        for (const [k, v] of Object.entries(wvData.data)) {
+          if (typeof v === 'string') fields[k] = v;
+        }
+        worldview = fields;
+      }
+    } catch {}
+
     try {
       const existingNames = getAllNames();
       const systemPromptOverride = await fetchSystemPrompt();
@@ -1013,7 +1177,7 @@ export const GeoMapPanel: React.FC<Props> = ({
         const rootNames = 地图列表
           .filter(m => !m.父地图ID)
           .map(m => m.地图名称);
-        const prompt = buildWorldMapPrompt(null, rootNames, existingNames);
+        const prompt = buildWorldMapPrompt(worldview, rootNames, existingNames);
         const userContent = aiPrompt || '请生成一个全新的世界级地图';
         const messages = [
           { role: 'system' as const, content: systemPromptOverride || prompt },
@@ -1035,8 +1199,21 @@ export const GeoMapPanel: React.FC<Props> = ({
           },
           maxRetries: 3,
         });
-        if (result) setGenResult({ mode: 'world', data: result.data });
-        else setGenError('AI返回格式解析失败');
+        if (result) {
+          const genId = await saveGeneration(
+            result.data,
+            'world',
+            null,
+            worldview,
+            aiPrompt
+          );
+          setGenResult({
+            mode: 'world',
+            data: result.data,
+            worldview,
+            generationId: genId,
+          });
+        } else setGenError('AI返回格式解析失败');
       } else if (aiMode === 'submap') {
         const parent = 选中节点ID
           ? 地图列表.find(m => m.id === 选中节点ID) || 当前地图
@@ -1050,7 +1227,7 @@ export const GeoMapPanel: React.FC<Props> = ({
           .filter(m => m.父地图ID === parent.id)
           .map(m => m.地图名称);
         const prompt = buildSubMapPrompt(
-          null,
+          worldview,
           parent,
           childNames,
           existingNames
@@ -1078,14 +1255,23 @@ export const GeoMapPanel: React.FC<Props> = ({
           },
           maxRetries: 3,
         });
-        if (result)
+        if (result) {
+          const genId = await saveGeneration(
+            result.data,
+            'submap',
+            parent.id,
+            worldview,
+            aiPrompt
+          );
           setGenResult({
             mode: 'submap',
             data: result.data,
             parentId: parent.id,
             parentLevel: parent.地图等级,
+            worldview,
+            generationId: genId,
           });
-        else setGenError('AI返回格式解析失败');
+        } else setGenError('AI返回格式解析失败');
       } else {
         const parent = 选中节点ID
           ? 地图列表.find(m => m.id === 选中节点ID) || 当前地图
@@ -1105,7 +1291,7 @@ export const GeoMapPanel: React.FC<Props> = ({
           aiSelectedLocations.includes(l.id)
         );
         const prompt = buildRoutePrompt(
-          null,
+          worldview,
           parent,
           selectedLocs,
           existingNames
@@ -1135,13 +1321,24 @@ export const GeoMapPanel: React.FC<Props> = ({
         });
         if (result) {
           const routeData = result.data?.数据 as 子地图生成结果;
-          if (!routeData?.路线列表?.length) setGenError('AI未生成任何路线');
-          else
+          if (!routeData?.路线列表?.length) {
+            setGenError('AI未生成任何路线');
+          } else {
+            const genId = await saveGeneration(
+              result.data,
+              'route',
+              parent.id,
+              worldview,
+              aiPrompt
+            );
             setGenResult({
               mode: 'route',
               data: result.data,
               parentId: parent.id,
+              worldview,
+              generationId: genId,
             });
+          }
         } else setGenError('AI返回格式解析失败');
       }
     } catch (e: any) {
@@ -1159,6 +1356,8 @@ export const GeoMapPanel: React.FC<Props> = ({
     地图列表,
     getAllNames,
     fetchSystemPrompt,
+    saveGeneration,
+    projectId,
   ]);
 
   // Robust name → id lookup: exact → trimmed → includes
@@ -1192,48 +1391,8 @@ export const GeoMapPanel: React.FC<Props> = ({
     // Suppress handleNodeMove PUTs during AI generation
     suppressMoveRef.current = true;
     try {
-      // Step 0: Fetch worldview data for generations POST (source: GET /api/geo-maps/project/{id}/worldview)
-      let 世界观信息: Record<string, string> | null = null;
-      try {
-        const wvRes = await fetch(
-          `${API_BASE}/api/geo-maps/project/${projectId}/worldview`,
-          {
-            headers: getAuthHeaders(),
-          }
-        );
-        const wvData = await wvRes.json();
-        if (wvData.success && wvData.data) {
-          const fields: Record<string, string> = {};
-          for (const [k, v] of Object.entries(wvData.data)) {
-            if (typeof v === 'string') fields[k] = v;
-          }
-          世界观信息 = fields;
-        }
-      } catch {}
-
-      // Step 1: POST generations — save generation record (BEFORE creating maps)
-      let generationId: number | null = null;
-      try {
-        const gr = await fetch(
-          `${API_BASE}/api/geo-maps/project/${projectId}/generations`,
-          {
-            method: 'POST',
-            headers: {
-              ...getAuthHeaders(),
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify({
-              提示词: aiPrompt || '',
-              世界观信息: 世界观信息 || {},
-              生成内容: genResult.data?.数据 || {},
-              生成类型: 'hierarchy',
-              地图ID: genResult.parentId || null,
-            }),
-          }
-        );
-        const gRes = await gr.json();
-        if (gRes.success && gRes.data?.id) generationId = gRes.data.id;
-      } catch {}
+      // Step 1: Generation ID from save during startGeneration
+      const generationId = genResult.generationId || null;
 
       // Step 2: POST maps — create each node sequentially
       const postNode = async (
@@ -1268,9 +1427,43 @@ export const GeoMapPanel: React.FC<Props> = ({
         }
       };
 
+      const batchCreate = async (
+        items: Array<{
+          地图名称: string;
+          地图描述: string;
+          父地图ID: number | null;
+          地图类型: string;
+          地图等级: number;
+        }>
+      ): Promise<{
+        success: boolean;
+        data?: {
+          创建结果: Array<{ 成功: boolean; id?: number }>;
+          成功数: number;
+        };
+      }> => {
+        try {
+          const r = await fetch(
+            `${API_BASE}/api/geo-maps/project/${projectId}/batch`,
+            {
+              method: 'POST',
+              headers: {
+                ...getAuthHeaders(),
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({ 子地图列表: items }),
+            }
+          );
+          return await r.json();
+        } catch {
+          return { success: false };
+        }
+      };
+
       let newRootId: number | null = null;
       let firstContinentId: number | null = null;
       let firstRegionId: number | null = null;
+      let firstCityId: number | null = null;
       const newNodes: 地图数据[] = [];
       const newConnections: 连线数据[] = [];
       const nameToId = new Map<string, number>();
@@ -1345,6 +1538,7 @@ export const GeoMapPanel: React.FC<Props> = ({
                 3
               );
               if (!ctid) continue;
+              if (!firstCityId) firstCityId = ctid;
               nameToId.set(city.地图名称.trim(), ctid);
               newNodes.push({
                 id: ctid,
@@ -1377,8 +1571,17 @@ export const GeoMapPanel: React.FC<Props> = ({
             }
           }
         }
-        // Routes: real website uses first REGION ID as parent (source: 父地图ID=区域级)
-        const routeParentId = firstRegionId || firstContinentId || worldId;
+        // Routes: real website uses priority: region -> city -> continent -> world
+        // Source: Vue Ke() lines 12821-12833
+        let routeParentId =
+          firstRegionId || firstCityId || firstContinentId || worldId;
+        // If still no suitable parent, find any node with level >= 2 && < 5
+        if (!firstRegionId && !firstCityId && !firstContinentId) {
+          const suitableNode = newNodes.find(
+            n => n.地图等级 >= 2 && n.地图等级 < 5
+          );
+          if (suitableNode) routeParentId = suitableNode.id as number;
+        }
         for (const route of world.路线列表 || []) {
           const routeDesc = `${route.描述 || ''}\n起点：${route.起点}\n终点：${route.终点}`;
           const rid = await postNode(
@@ -1411,26 +1614,68 @@ export const GeoMapPanel: React.FC<Props> = ({
         }
       } else if (genResult.mode === 'submap' && genResult.data?.数据) {
         const subData = genResult.data.数据 as 子地图生成结果;
-        const newSubIds = new Map<string, number>();
-        for (const sub of subData.子地图列表 || []) {
-          const sid = await postNode(
-            sub.地图名称,
-            sub.地图描述 || '',
-            genResult.parentId,
-            sub.地图类型 === '子地图' ? '地点' : sub.地图类型,
-            genResult.parentLevel + 1
-          );
-          if (!sid) continue;
-          newSubIds.set(sub.地图名称.trim(), sid);
-          newNodes.push({
-            id: sid,
+        const parentMap = 地图列表.find(m => m.id === genResult.parentId);
+        const parentLevel = genResult.parentLevel;
+        const childLevel = parentLevel + 1;
+
+        // Collect all submaps for batch creation
+        const batchItems = (subData.子地图列表 || []).map(sub => {
+          const type =
+            sub.地图类型 === '子地图'
+              ? getLevelType(parentLevel + 1) // H4: derive type from parent level
+              : sub.地图类型;
+          return {
             地图名称: sub.地图名称,
             地图描述: sub.地图描述 || '',
             父地图ID: genResult.parentId,
-            地图类型: sub.地图类型 === '子地图' ? '地点' : sub.地图类型,
-            地图等级: genResult.parentLevel + 1,
-          });
+            地图类型: type,
+            地图等级: childLevel,
+          };
+        });
+
+        const newSubIds = new Map<string, number>();
+        if (batchItems.length > 0) {
+          const batchResult = await batchCreate(batchItems);
+          if (batchResult.success && batchResult.data) {
+            const results = batchResult.data.创建结果 || [];
+            // Circular layout around parent — source: Vue et() lines 12722-12730
+            const parentContent = parentMap?.地图内容 || {};
+            const cx = parentContent.x ?? 400;
+            const cy = parentContent.y ?? 300;
+            results.forEach((r, i) => {
+              if (r.成功 && r.id) {
+                const angle =
+                  (i / batchItems.length) * Math.PI * 2 +
+                  (Math.random() - 0.5) * 0.5;
+                const radius = 120 + Math.random() * 130;
+                const nx = Math.round(cx + Math.cos(angle) * radius);
+                const ny = Math.round(cy + Math.sin(angle) * radius);
+                const pos = { x: nx, y: ny };
+                newSubIds.set(batchItems[i].地图名称.trim(), r.id);
+                newNodes.push({
+                  id: r.id,
+                  ...batchItems[i],
+                  地图内容: pos,
+                  x: nx,
+                  y: ny,
+                });
+                // Save position to backend
+                fetch(
+                  `${API_BASE}/api/geo-maps/project/${projectId}/map/${r.id}`,
+                  {
+                    method: 'PUT',
+                    headers: {
+                      ...getAuthHeaders(),
+                      'content-type': 'application/json',
+                    },
+                    body: JSON.stringify({ 地图内容: JSON.stringify(pos) }),
+                  }
+                ).catch(() => {});
+              }
+            });
+          }
         }
+        // Routes (separate, always level 5) — H8: routes always level 5
         const existingSiblings = new Map<string, number>();
         地图列表
           .filter(m => m.父地图ID === genResult.parentId)
@@ -1445,7 +1690,7 @@ export const GeoMapPanel: React.FC<Props> = ({
             routeDesc,
             genResult.parentId,
             '路线',
-            genResult.parentLevel + 1
+            5
           );
           if (!rid) continue;
           newNodes.push({
@@ -1454,7 +1699,7 @@ export const GeoMapPanel: React.FC<Props> = ({
             地图描述: routeDesc,
             父地图ID: genResult.parentId,
             地图类型: '路线',
-            地图等级: genResult.parentLevel + 1,
+            地图等级: 5,
           });
           const fromId = findIdByName(route.起点, existingSiblings);
           const toId = findIdByName(route.终点, existingSiblings);
@@ -1512,8 +1757,8 @@ export const GeoMapPanel: React.FC<Props> = ({
         set连线列表(prev => [...prev, ...newConnections]);
       if (newRootId) set当前地图ID(newRootId);
 
-      // Step 2.5: PUT adopt — only for submap/route modes
-      if (generationId && genResult.mode !== 'world') {
+      // Step 2.5: PUT adopt — mark generation as adopted
+      if (generationId) {
         try {
           await fetch(
             `${API_BASE}/api/geo-maps/project/${projectId}/generations/${generationId}/adopt`,
@@ -1556,13 +1801,47 @@ export const GeoMapPanel: React.FC<Props> = ({
         }, 500);
       }, 200);
 
+      loadHistory();
       setShowAIDialog(false);
       setGenResult(null);
     } catch (e) {
       console.error('adoptResult error:', e);
       suppressMoveRef.current = false;
     }
-  }, [genResult, 地图列表, projectId, findIdByName, aiPrompt]);
+  }, [genResult, 地图列表, projectId, findIdByName, aiPrompt, loadHistory]);
+
+  // ── History adopt/delete handlers ──
+  const adoptFromHistory = useCallback(
+    async (historyItem: (typeof genHistory)[number]) => {
+      if (historyItem.已采用 || !projectId) return;
+      suppressMoveRef.current = true;
+      try {
+        await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/generations/${historyItem.id}/adopt`,
+          { method: 'PUT', headers: getAuthHeaders() }
+        );
+        loadHistory();
+      } catch {
+      } finally {
+        suppressMoveRef.current = false;
+      }
+    },
+    [projectId, loadHistory]
+  );
+
+  const deleteFromHistory = useCallback(
+    async (id: string) => {
+      if (!projectId) return;
+      try {
+        await fetch(
+          `${API_BASE}/api/geo-maps/project/${projectId}/generations/${id}`,
+          { method: 'DELETE', headers: getAuthHeaders() }
+        );
+        setGenHistory(prev => prev.filter(g => g.id !== id));
+      } catch {}
+    },
+    [projectId]
+  );
 
   // ── Layout mode ──
   const setLayoutModeAndSave = useCallback(
@@ -1622,7 +1901,9 @@ export const GeoMapPanel: React.FC<Props> = ({
                 className="地图下拉"
                 value={当前地图ID || ''}
                 onChange={e => {
-                  set当前地图ID(Number(e.target.value));
+                  const newId = Number(e.target.value);
+                  set当前地图ID(newId);
+                  batchUpdateVisits([newId]);
                 }}
               >
                 {根地图列表.map(r => (
@@ -2707,12 +2988,18 @@ export const GeoMapPanel: React.FC<Props> = ({
                       </p>
                       <div className="flex gap-2">
                         {!item.已采用 && (
-                          <button className="flex-1 px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded text-xs cursor-pointer">
+                          <button
+                            className="flex-1 px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded text-xs cursor-pointer"
+                            onClick={() => adoptFromHistory(item)}
+                          >
                             <i className="ri-check-line mr-0.5" />
                             采用
                           </button>
                         )}
-                        <button className="px-2 py-1 bg-[var(--bg-card)] hover:bg-red-500/20 hover:text-red-400 rounded text-xs cursor-pointer">
+                        <button
+                          className="px-2 py-1 bg-[var(--bg-card)] hover:bg-red-500/20 hover:text-red-400 rounded text-xs cursor-pointer"
+                          onClick={() => deleteFromHistory(item.id)}
+                        >
                           <i className="ri-delete-bin-line" />
                         </button>
                       </div>

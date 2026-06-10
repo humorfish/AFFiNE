@@ -1,63 +1,444 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import {
-  generateLLM,
-  generateValidated,
-  parseAIJSON,
-  useSystemPrompt,
-} from './panel-shared';
+import { generateLLM, generateValidated, parseAIJSON } from './panel-shared';
 import { z } from 'zod';
-import {
-  saveVersion,
-  saveGeneration,
-  saveData,
-  API_BASE,
-  getAuthHeaders,
-} from '../useWorldApi';
+import { API_BASE, getAuthHeaders } from '../useWorldApi';
 
 // ── Source-derived prompt & pipe parsers (源码 lines 38628+) ──────────
 
-function buildCharacterPrompt(): string {
-  return `你是一位专业的小说角色设计师。请设计详细的角色档案。
+// ── Context types for dynamic prompt ──────────────────────────────
 
-输出格式要求（管道符分隔，每行一个字段）：
+interface 角色生成上下文 {
+  世界观?: {
+    世界名称?: string;
+    世界类型?: string;
+    时代背景?: string;
+    核心规则?: string;
+    社会结构?: string;
+    特殊元素?: string;
+  };
+  力量体系?: Array<{
+    id: number;
+    名称?: string;
+    类型?: string;
+    力量来源?: string;
+    描述?: string;
+  }>;
+  力量境界?: Array<{
+    体系ID?: number;
+    名称?: string;
+    战力系数?: number;
+    境界等级?: number;
+    提升条件?: string;
+    能力表现?: string;
+    描述?: string;
+  }>;
+  功法体系?: Array<{
+    名称?: string;
+    品级?: string;
+    大类?: string;
+    效果分类?: string;
+  }>;
+  势力阵营?: Array<{
+    势力名称?: string;
+    名称?: string;
+    势力类型?: string;
+    类型?: string;
+    立场?: string;
+    势力描述?: string;
+    描述?: string;
+  }>;
+  特殊设定?: Array<{
+    名称?: string;
+    类型?: string;
+    描述?: string;
+    简介?: string;
+  }>;
+  故事核心?: {
+    核心主题?: string;
+    核心冲突?: string;
+  };
+  现有角色?: Array<{
+    姓名?: string;
+    类型?: string;
+    身份?: string;
+    人生经历?: Array<{ 章节?: string }>;
+  }>;
+  大纲章节?: Array<{
+    节点类型?: string;
+    标题?: string;
+  }>;
+  情节脉络?: Array<{
+    模式?: string;
+    幕序号?: number;
+    幕名称?: string;
+    章节范围?: string;
+    内容概要?: string;
+    核心事件?: string;
+    角色发展?: string;
+    情感基调?: string;
+    冲突升级?: string;
+  }>;
+}
+
+interface 角色生成选项 {
+  生成数量?: number;
+  势力绑定方式?: '无势力' | '绑定现有势力' | 'AI随机绑定';
+  选中势力?: {
+    势力名称?: string;
+    势力类型?: string;
+    立场?: string;
+    势力描述?: string;
+  };
+  力量体系ID?: number;
+  章节范围?: {
+    开始章节名?: string;
+    结束章节名?: string;
+    开始章节编号?: number;
+    结束章节编号?: number;
+  };
+  避免章节冲突?: boolean;
+  生成关系?: boolean;
+}
+
+/**
+ * Build dynamic character generation prompt.
+ * 1:1 conversion of Vue `et(上下文, 选项)` — line 38621-38935
+ */
+function buildCharacterPrompt(
+  上下文: 角色生成上下文 | null,
+  选项?: 角色生成选项
+): string {
+  const Ue = 选项?.生成数量 || 1;
+  const Be = 选项?.势力绑定方式 || '无势力';
+  const we = 选项?.选中势力 || null;
+  const He = 选项?.章节范围 || null;
+  const be = 选项?.避免章节冲突 || false;
+
+  let ce = `你是一位专业的小说角色设计师。请根据以下世界观设定，创建${Ue > 1 ? Ue + '个' : '一个'}符合该世界观的角色。
+
+# 世界观背景
+`;
+
+  // 1. 世界观背景 (6 fields)
+  if (上下文?.世界观) {
+    ce += `世界名称：${上下文.世界观.世界名称 || '未设定'}
+世界类型：${上下文.世界观.世界类型 || '未设定'}
+时代背景：${上下文.世界观.时代背景 || '未设定'}
+核心规则：${上下文.世界观.核心规则 || '未设定'}
+社会结构：${上下文.世界观.社会结构 || '未设定'}
+特殊元素：${上下文.世界观.特殊元素 || '未设定'}
+`;
+  } else {
+    ce += `（世界观未设定，请创建一个通用的玄幻/修仙角色）
+`;
+  }
+
+  // 2. 力量体系 (filtered by ID if specified)
+  const Je = 选项?.力量体系ID || null;
+  const dt = Je
+    ? (上下文?.力量体系 || []).filter(Tt => Tt.id === Je)
+    : 上下文?.力量体系 || [];
+  const At = Je
+    ? (上下文?.力量境界 || []).filter(Tt => Tt.体系ID === Je)
+    : 上下文?.力量境界 || [];
+
+  if (dt.length > 0) {
+    ce += `
+# 力量体系
+`;
+    dt.forEach(Tt => {
+      ce += `
+## ${Tt.名称}
+`;
+      ce += `- 体系类型：${Tt.类型 || '未分类'}
+`;
+      if (Tt.力量来源)
+        ce += `- 力量来源：${Tt.力量来源}
+`;
+      if (Tt.描述)
+        ce += `- 体系描述：${Tt.描述}
+`;
+    });
+  }
+
+  // 3. 境界等级 (filtered by system ID)
+  if (At.length > 0) {
+    ce += `
+# 境界等级（从低到高）
+`;
+    At.forEach(Tt => {
+      ce += `- ${Tt.名称}（LV${Tt.战力系数 ?? Tt.境界等级 ?? '1.00'}）`;
+      if (Tt.提升条件) ce += `  提升条件：${Tt.提升条件}`;
+      if (Tt.能力表现) ce += `  能力表现：${Tt.能力表现}`;
+      if (Tt.描述) ce += `  描述：${Tt.描述}`;
+      ce += `
+`;
+    });
+    ce += `
+注意：角色的「境界」字段必须从上述境界等级中选取，不可自创。
+`;
+  }
+
+  // 4. 功法体系 (max 5, reference only)
+  if ((上下文?.功法体系?.length ?? 0) > 0) {
+    ce += `
+# 功法体系（供参考）
+`;
+    上下文!.功法体系!.slice(0, 5).forEach(Tt => {
+      ce += `- ${Tt.名称}（${Tt.品级 || ''}/${Tt.大类 || Tt.效果分类 || ''}）
+`;
+    });
+  }
+
+  // 5. 势力阵营 (max 8)
+  if ((上下文?.势力阵营?.length ?? 0) > 0) {
+    ce += `
+# 主要势力
+`;
+    上下文!.势力阵营!.slice(0, 8).forEach(Tt => {
+      ce += `- ${Tt.势力名称 || Tt.名称}（${Tt.势力类型 || Tt.类型 || ''}，${Tt.立场 || ''}）：${Tt.势力描述 || Tt.描述 || ''}
+`;
+    });
+  }
+
+  // 6. 势力归属要求 (3 binding modes)
+  if (Be === '绑定现有势力' && we) {
+    ce += `
+# 势力归属要求
+生成的角色必须属于以下势力：
+势力名称：${we.势力名称}
+势力类型：${we.势力类型 || ''}
+势力立场：${we.立场 || ''}
+势力描述：${we.势力描述 || ''}
+请确保角色的身份、境界、性格等与该势力的特点相符。
+`;
+  } else if (Be === 'AI随机绑定' && (上下文?.势力阵营?.length ?? 0) > 0) {
+    ce += `
+# 势力归属要求
+请根据角色的特点，从上述势力中为${Ue > 1 ? '每个' : '该'}角色选择一个合适的势力归属。
+${Ue > 1 ? '不同角色可以属于不同的势力，以增加多样性。' : ''}
+在角色数据中添加"所属势力"字段，填写势力名称。
+`;
+  }
+
+  // 7. 特殊设定/金手指
+  if ((上下文?.特殊设定?.length ?? 0) > 0) {
+    ce += `
+# 特殊设定（金手指）
+`;
+    上下文!.特殊设定!.forEach(Tt => {
+      ce += `- ${Tt.名称}（${Tt.类型 || ''}）：${Tt.描述 || Tt.简介 || ''}
+`;
+    });
+  }
+
+  // 8. 故事核心
+  if (上下文?.故事核心) {
+    ce += `
+# 故事核心
+`;
+    if (上下文.故事核心.核心主题)
+      ce += `核心主题：${上下文.故事核心.核心主题}
+`;
+    if (上下文.故事核心.核心冲突)
+      ce += `核心冲突：${上下文.故事核心.核心冲突}
+`;
+  }
+
+  // 9. 现有角色 (严禁同名)
+  if ((上下文?.现有角色?.length ?? 0) > 0) {
+    ce += `
+# 现有角色（严禁创建与以下角色同名的角色！）
+`;
+    上下文!.现有角色!.forEach(Tt => {
+      let Ht = `- ${Tt.姓名}（${Tt.类型}）- ${Tt.身份 || '未知身份'}`;
+      if (be && Array.isArray(Tt.人生经历) && Tt.人生经历.length > 0) {
+        const es = Tt.人生经历.map(vs => vs.章节).filter(Boolean);
+        if (es.length > 0) Ht += ` | 出场章节：${es.join('、')}`;
+      }
+      ce +=
+        Ht +
+        `
+`;
+    });
+    ce += `
+【重要约束】以上角色已存在于项目中，你生成的新角色姓名不得与上述任何角色相同或高度相似。违反此规则的角色将被系统自动拒绝。
+`;
+
+    // 10. 章节出场角色分布 (optional, when 避免章节冲突=true)
+    if (be) {
+      const Tt = new Map<string, string[]>();
+      上下文!.现有角色!.forEach(Ht => {
+        if (Array.isArray(Ht.人生经历)) {
+          Ht.人生经历.forEach(es => {
+            if (es.章节) {
+              if (!Tt.has(es.章节)) Tt.set(es.章节, []);
+              Tt.get(es.章节)!.push(Ht.姓名!);
+            }
+          });
+        }
+      });
+      if (Tt.size > 0) {
+        ce += `
+# 章节出场角色分布（避免冲突）
+`;
+        ce += `以下章节已有角色出场，请合理安排新角色的出场时机：
+`;
+        [...Tt.entries()]
+          .sort((es, vs) => {
+            const Qs = parseInt((es[0].match(/第(\d+)[章节]/) || [])[1]) || 0;
+            const Ws = parseInt((vs[0].match(/第(\d+)[章节]/) || [])[1]) || 0;
+            return Qs - Ws;
+          })
+          .forEach(([es, vs]) => {
+            ce += `- ${es}：已有 ${vs.join('、')} 出场
+`;
+          });
+        ce += `
+【章节冲突约束】
+`;
+        ce += `1. 新角色的人生经历应优先安排在没有或较少角色出场的章节，使角色分布更均匀
+`;
+        ce += `2. 同一章节出场角色总数不宜超过3个，除非剧情确实需要多角色交汇
+`;
+        ce += `3. 如果指定的章节范围内所有章节都有角色出场，可根据剧情需要选择合适位置，但需注明原因
+`;
+      }
+    }
+  }
+
+  // 11. 角色关系生成要求 (optional)
+  if (选项?.生成关系 !== false && (上下文?.现有角色?.length ?? 0) > 0) {
+    ce += `
+# 角色关系生成要求
+请为新角色设计与现有角色之间的关系。关系类型可以是：师徒、同门、敌对、竞争、暗恋、主仆、朋友、家人、结盟、宿敌、经济、告密等。
+要求：
+1. 只能与上方「现有角色」列表中的角色建立关系，目标角色名称必须严格匹配
+2. 每个新角色至少设计1条关系，最多3条
+3. 关系要符合世界观和角色设定，不要强行拼凑
+`;
+  }
+
+  // 12. 大纲章节结构
+  if ((上下文?.大纲章节?.length ?? 0) > 0) {
+    ce += `
+# 故事章节结构
+`;
+    上下文!.大纲章节!.forEach(Tt => {
+      if (Tt.节点类型 === 'volume') {
+        ce += `
+【${Tt.标题}】
+`;
+      } else if (Tt.节点类型 === 'chapter') {
+        ce += `- ${Tt.标题}
+`;
+      }
+    });
+  }
+
+  // 13. 情节脉络
+  if ((上下文?.情节脉络?.length ?? 0) > 0) {
+    const Tt = 上下文!.情节脉络![0].模式 || '未知模式';
+    ce += `
+# 情节脉络（${Tt}，共${上下文!.情节脉络!.length}幕）
+`;
+    上下文!.情节脉络!.forEach(Ht => {
+      ce += `第${Ht.幕序号}幕：${Ht.幕名称 || ''}${Ht.章节范围 ? `（${Ht.章节范围}）` : ''}
+`;
+      if (Ht.内容概要)
+        ce += `  内容概要：${Ht.内容概要}
+`;
+      if (Ht.核心事件)
+        ce += `  核心事件：${Ht.核心事件}
+`;
+      if (Ht.角色发展)
+        ce += `  角色发展：${Ht.角色发展}
+`;
+      if (Ht.情感基调)
+        ce += `  情感基调：${Ht.情感基调}
+`;
+      if (Ht.冲突升级)
+        ce += `  冲突升级：${Ht.冲突升级}
+`;
+    });
+  }
+
+  // 14. 章节范围约束 (optional)
+  if (He) {
+    ce += `
+# 章节范围约束
+`;
+    ce += `角色的人生经历必须限制在以下章节范围内：
+`;
+    ce += `- 开始章节：${He.开始章节名}
+`;
+    ce += `- 结束章节：${He.结束章节名}
+`;
+    if ((He.开始章节编号 ?? 0) > 0 && (He.结束章节编号 ?? 0) > 0) {
+      ce += `- 章节编号范围：第${He.开始章节编号}章 ~ 第${He.结束章节编号}章
+`;
+    }
+    ce += `【重要约束】
+`;
+    ce += `1. 角色人生经历中的"章节"字段只能填写上述范围内的章节名称，不得超出此范围
+`;
+    ce += `2. 第一条人生经历必须从"${He.开始章节名}"开始，确保角色从指定的起始章节登场
+`;
+    ce += `3. 人生经历应按章节顺序排列，从开始章节到结束章节合理安排角色的发展历程
+`;
+  }
+
+  // 15. Output format
+  ce += `
+【输出格式】（极简格式，节省token）
 R|姓名|类型|性别|年龄
 I|身份|境界|武器
-A|外貌描述
-S|简介
+A|外貌描述（10-30字）
+S|简介（20-50字）
 C|性格表层|性格中层|性格内核
-E|章节名|经历事件
-M|核心意义
-F|结局
+E|章节名|经历事件（10-30字）
+M|核心意义（20-50字）
+F|结局（10-30字）
 L|目标角色|关系类型|关系描述
 
-格式说明：
-- R 行：姓名、类型（主角/女主/反派/导师/配角）、性别（男/女/其他）、年龄
-- I 行：身份/职位、境界/实力、武器/法宝
-- A 行：外貌特征描述
-- S 行：角色简介（一两句话概括）
-- C 行：性格三个层次（表层性格、中层动机、核心价值观）
-- E 行：可多行，每段重要经历一行（章节名/阶段名、经历事件）
-- M 行：角色在故事中的核心意义
-- F 行：预设结局
-- L 行：可多行，与其他角色的关系（目标角色、关系类型、关系描述）
+【格式说明】
+- R: 基本信息（第1行，必填）
+  - 类型：${角色类型选项.join('/')}
+  - 性别：男/女
+- I: 身份境界武器（必填）
+- A: 外貌描述（10-30字）
+- S: 简介（20-50字）
+- C: 性格三层（用|分隔）
+- E: 人生经历（可多行，每行一个经历）
+- M: 核心意义（20-50字）
+- F: 结局（10-30字）
+- L: 角色关系（可多行，可选）
 
-示例：
-R|林清风|主角|男|18
-I|青云门内门弟子|练气七层|碧水剑
-A|身形修长，面容清俊，一袭白衣，眉宇间有股书卷气
-S|出身寒门却天赋异禀的修仙少年，在逆境中不断成长
-C|表面温和有礼|内心坚毅不服输|追求公正与自由
-E|入门试炼|在试炼中意外获得上古传承，展露头角
-E|宗门大比|击败同门师兄，引起长老注意
-M|代表平凡人通过努力可以打破命运枷锁
-F|成为一代宗师，开创新的修炼体系
-L|苏婉儿|女主|青梅竹马，相互扶持
+【输出示例】
+R|林凡|主角|男|十八岁
+I|青云宗外门弟子|炼气三层|青锋剑
+A|清秀少年，眉宇间透着坚毅
+S|出身贫寒的少年，意外获得神秘传承，踏上修仙之路
+C|温和谦逊|坚韧执着|心怀天下
+E|第1章 初入宗门|被检测出废灵根，饱受欺凌
+E|第5章 奇遇|在山洞中获得上古传承
+M|代表平凡少年的逆袭，诠释努力可以改变命运
+F|成为一代宗师，开创全新修炼体系
+L|苏婉儿|暗恋|心中暗暗倾慕却不敢表白
 
-要求：
-1. 角色姓名要有特色，符合世界观
-2. 性格要有层次，不能过于平面
-3. 经历要有戏剧张力，推动角色成长
-4. 关系网络要丰富，有冲突和羁绊`;
+【核心要求】
+1. 角色设定要符合世界观逻辑
+2. 性格三层要有递进关系
+3. 人生经历要与大纲章节对应
+4. ⚠️ 角色姓名绝对不能与已有角色重复
+
+【重要规则】
+1. 严格按格式输出，每行一个项
+2. R行必须在每个角色开始
+3. 不要输出任何其他内容
+4. ⚠️ 在输出前检查角色姓名是否与已有名称重复`;
+
+  return ce;
 }
 
 interface PipeExperience {
@@ -155,22 +536,22 @@ function parseCharacterResponse(text: string): 角色数据 | null {
   const pipeResults = parseCharacterPipe(text);
   if (pipeResults.length > 0) {
     const s = pipeResults[0];
-    const 性格 = [s.性格表层, s.性格中层, s.性格内核]
-      .filter(Boolean)
-      .join('；');
     return {
       id: Date.now(),
       姓名: s.姓名 || '',
       角色类型: s.类型 || '配角',
       性别: s.性别 || '男',
       年龄: s.年龄 || '',
-      性格,
       身份: s.身份 || '',
       简介: s.简介 || '',
       外貌: s.外貌 || '',
       境界: s.境界 || '',
       武器: s.武器 || '',
+      表层性格: s.性格表层 || '',
+      中层性格: s.性格中层 || '',
+      内核性格: s.性格内核 || '',
       核心意义: s.核心意义 || '',
+      结局: s.结局 || '',
       存续状态: '活跃',
     };
   }
@@ -182,34 +563,95 @@ function parseCharacterResponse(text: string): 角色数据 | null {
   if (parsed.角色类型) merged.角色类型 = parsed.角色类型;
   if (parsed.性别) merged.性别 = parsed.性别;
   if (parsed.年龄) merged.年龄 = parsed.年龄;
-  if (parsed.性格) merged.性格 = parsed.性格;
+  if (parsed.性格) {
+    merged.表层性格 = parsed.性格;
+  }
+  if (parsed.表层性格) merged.表层性格 = parsed.表层性格;
+  if (parsed.中层性格) merged.中层性格 = parsed.中层性格;
+  if (parsed.内核性格) merged.内核性格 = parsed.内核性格;
   if (parsed.身份) merged.身份 = parsed.身份;
   if (parsed.简介) merged.简介 = parsed.简介;
   if (parsed.外貌) merged.外貌 = parsed.外貌;
   if (parsed.境界) merged.境界 = parsed.境界;
   if (parsed.武器) merged.武器 = parsed.武器;
   if (parsed.核心意义) merged.核心意义 = parsed.核心意义;
+  if (parsed.结局) merged.结局 = parsed.结局;
   if (parsed.存续状态) merged.存续状态 = parsed.存续状态;
   return merged;
 }
 
 // ── Source-derived data ────────────────────────────────────────
 
-const characterMgmtSchema = z.record(z.any());
+const characterMgmtSchema = z.union([z.record(z.any()), z.array(z.any())]);
 
-const 角色类型选项 = ['主角', '女主', '反派', '导师', '配角'];
+const 角色类型选项 = [
+  '主角',
+  '女主',
+  '双男主',
+  '反派',
+  '女反派',
+  '宿敌',
+  '隐藏BOSS',
+  '导师',
+  '配角',
+  '挚友',
+  '知己',
+  '对手',
+  '盟友',
+  '神秘人',
+  '穿越者',
+  '重生者',
+  '灵兽',
+  '神兽',
+  'NPC',
+  '系统',
+  '旁白',
+  '群像',
+  '龙套',
+  '路人',
+];
 
 const 类型样式: Record<string, string> = {
   主角: 'bg-blue-500/20 text-blue-400',
   女主: 'bg-pink-500/20 text-pink-400',
-  反派: 'bg-red-500/20 text-red-400',
+  双男主: 'bg-indigo-500/20 text-indigo-400',
+  反派: 'bg-orange-500/20 text-orange-400',
+  女反派: 'bg-rose-500/20 text-rose-400',
+  宿敌: 'bg-red-800/20 text-red-300',
+  隐藏BOSS: 'bg-purple-800/20 text-purple-300',
   导师: 'bg-green-500/20 text-green-400',
   配角: 'bg-gray-500/20 text-gray-400',
+  挚友: 'bg-amber-500/20 text-amber-400',
+  知己: 'bg-orange-400/20 text-orange-300',
+  对手: 'bg-violet-500/20 text-violet-400',
+  盟友: 'bg-teal-500/20 text-teal-400',
+  神秘人: 'bg-indigo-500/20 text-indigo-300',
+  穿越者: 'bg-fuchsia-500/20 text-fuchsia-400',
+  重生者: 'bg-emerald-500/20 text-emerald-400',
+  灵兽: 'bg-lime-500/20 text-lime-400',
+  神兽: 'bg-yellow-400/20 text-yellow-400',
+  NPC: 'bg-sky-500/20 text-sky-400',
+  系统: 'bg-cyan-400/20 text-cyan-400',
+  旁白: 'bg-slate-400/20 text-slate-400',
+  群像: 'bg-indigo-400/20 text-purple-400',
+  龙套: 'bg-stone-500/20 text-stone-400',
+  路人: 'bg-zinc-500/20 text-zinc-400',
 };
 
 const 性别选项 = ['男', '女', '其他'];
 
 // ── Interfaces ─────────────────────────────────────────────────
+
+interface 人生经历项 {
+  章节?: string;
+  事件?: string;
+}
+
+interface 角色关系项 {
+  目标角色?: string;
+  关系类型?: string;
+  关系描述?: string;
+}
 
 interface 角色数据 {
   id: number;
@@ -217,14 +659,29 @@ interface 角色数据 {
   角色类型: string;
   性别: string;
   年龄: string;
-  性格: string;
   身份: string;
   简介: string;
   外貌: string;
   境界: string;
   武器: string;
+  表层性格: string;
+  中层性格: string;
+  内核性格: string;
   核心意义: string;
+  结局: string;
   存续状态: string;
+  // Vue detail API additional fields
+  人生经历?: 人生经历项[];
+  角色关系?: 角色关系项[];
+  所属势力?: string;
+  其他信息?: string;
+  力量体系ID?: number | null;
+  初始境界ID?: number | null;
+  当前境界ID?: number | null;
+  初始战力系数?: number | null;
+  当前战力系数?: number | null;
+  头像颜色?: string;
+  颜色?: string;
 }
 
 interface Props {
@@ -241,14 +698,26 @@ const empty角色 = (): 角色数据 => ({
   角色类型: '配角',
   性别: '男',
   年龄: '',
-  性格: '',
   身份: '',
   简介: '',
   外貌: '',
   境界: '',
   武器: '',
+  表层性格: '',
+  中层性格: '',
+  内核性格: '',
   核心意义: '',
+  结局: '',
   存续状态: '活跃',
+  人生经历: [],
+  角色关系: [],
+  所属势力: '',
+  其他信息: '',
+  力量体系ID: null,
+  初始境界ID: null,
+  当前境界ID: null,
+  初始战力系数: null,
+  当前战力系数: null,
 });
 
 // ── Main Component ─────────────────────────────────────────────
@@ -272,10 +741,6 @@ export const CharacterMgmtPanel: React.FC<Props> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [showAIDialog, setShowAIDialog] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const fetchSystemPrompt = useSystemPrompt(
-    'AI生成角色',
-    buildCharacterPrompt()
-  );
 
   // ── Data fetching ──
   useEffect(() => {
@@ -301,9 +766,21 @@ export const CharacterMgmtPanel: React.FC<Props> = ({
     []
   );
 
-  const startEdit = (item: 角色数据) => {
+  const startEdit = async (item: 角色数据) => {
     setFormData({ ...item });
     setView('detail');
+    // Fetch full detail from API — Vue uses GET /characters/{id}
+    if (item.id) {
+      try {
+        const res = await fetch(`${API_BASE}/api/characters/${item.id}`, {
+          headers: getAuthHeaders(),
+        });
+        const result = await res.json();
+        if (result.success && result.data) {
+          setFormData(prev => ({ ...prev, ...result.data }));
+        }
+      } catch {}
+    }
   };
 
   const startCreate = () => {
@@ -315,13 +792,30 @@ export const CharacterMgmtPanel: React.FC<Props> = ({
     if (!projectId || !formData.姓名.trim()) return;
     setSaving(true);
     try {
-      await saveData('characters', projectId, formData);
-      if (formData.id && 角色列表.some(d => d.id === formData.id)) {
-        set角色列表(prev =>
-          prev.map(d => (d.id === formData.id ? formData : d))
-        );
+      let res: Response;
+      if (formData.id) {
+        // Update existing: PUT /api/characters/:id
+        res = await fetch(`${API_BASE}/api/characters/${formData.id}`, {
+          method: 'PUT',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(formData),
+        });
       } else {
-        const saved = { ...formData, id: formData.id || Date.now() };
+        // Create new: POST /api/characters/project/:projectId
+        res = await fetch(`${API_BASE}/api/characters/project/${projectId}`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(formData),
+        });
+      }
+      const result = await res.json();
+      const saved =
+        result.success && result.data
+          ? result.data
+          : { ...formData, id: formData.id || Date.now() };
+      if (formData.id && 角色列表.some(d => d.id === formData.id)) {
+        set角色列表(prev => prev.map(d => (d.id === formData.id ? saved : d)));
+      } else {
         set角色列表(prev => [...prev, saved]);
         setFormData(saved);
       }
@@ -352,7 +846,23 @@ export const CharacterMgmtPanel: React.FC<Props> = ({
     setAiGenerating(true);
     abortRef.current = new AbortController();
     try {
-      const systemPrompt = await fetchSystemPrompt();
+      // Fetch context from API — Vue calls GET /characters/project/{id}/context
+      let 上下文: 角色生成上下文 | null = null;
+      try {
+        const ctxRes = await fetch(
+          `${API_BASE}/api/characters/project/${projectId}/context`,
+          { headers: getAuthHeaders() }
+        );
+        const ctxData = await ctxRes.json();
+        if (ctxData.success && ctxData.data) 上下文 = ctxData.data;
+      } catch {}
+
+      const systemPrompt = buildCharacterPrompt(上下文, {
+        生成数量: 1,
+        势力绑定方式: '无势力',
+        避免章节冲突: false,
+        生成关系: true,
+      });
       const messages = [
         { role: 'system' as const, content: systemPrompt },
         {
@@ -372,23 +882,68 @@ export const CharacterMgmtPanel: React.FC<Props> = ({
             onChunk: () => {},
             signal: abortRef.current!.signal,
           }),
-        parseResponse: text => parseCharacterResponse(text),
+        parseResponse: text => {
+          // Parse all characters from pipe output (supports multi-character)
+          const pipeResults = parseCharacterPipe(text);
+          if (pipeResults.length > 0) {
+            return pipeResults.map(s => {
+              return {
+                id: Date.now() + Math.random(),
+                姓名: s.姓名 || '',
+                角色类型: s.类型 || '配角',
+                性别: s.性别 || '男',
+                年龄: s.年龄 || '',
+                身份: s.身份 || '',
+                简介: s.简介 || '',
+                外貌: s.外貌 || '',
+                境界: s.境界 || '',
+                武器: s.武器 || '',
+                表层性格: s.性格表层 || '',
+                中层性格: s.性格中层 || '',
+                内核性格: s.性格内核 || '',
+                核心意义: s.核心意义 || '',
+                结局: s.结局 || '',
+                存续状态: '活跃',
+              };
+            });
+          }
+          // Fallback: single character
+          const single = parseCharacterResponse(text);
+          return single ? [single] : null;
+        },
         maxRetries: 3,
       });
-      const parsed = (result?.data ?? null) as unknown as 角色数据 | null;
+
+      const parsed = (result?.data ?? null) as unknown as
+        | 角色数据[]
+        | 角色数据
+        | null;
       if (parsed) {
-        const fullText = result!.rawText;
-        setFormData(parsed);
+        // Handle both single character and multi-character results
+        const characters = Array.isArray(parsed) ? parsed : [parsed];
+        // POST each character to API (matching Vue adopt flow)
         if (projectId) {
-          await saveGeneration('characters', projectId, {
-            提示词: aiPrompt,
-            生成类型: '角色',
-            生成内容: { text: fullText },
-          });
-          await saveVersion('characters', projectId, {
-            描述: 'AI生成角色',
-            内容: parsed,
-          });
+          for (const char of characters) {
+            try {
+              const res = await fetch(
+                `${API_BASE}/api/characters/project/${projectId}`,
+                {
+                  method: 'POST',
+                  headers: getAuthHeaders(),
+                  body: JSON.stringify(char),
+                }
+              );
+              const saved = await res.json();
+              if (saved.success && saved.data) {
+                set角色列表(prev => [...prev, saved.data]);
+              }
+            } catch {}
+          }
+        }
+        // Set first character to form for editing
+        if (characters.length > 0) {
+          setFormData(characters[0]);
+          setView('detail');
         }
       }
     } catch (e: any) {
@@ -763,13 +1318,38 @@ export const CharacterMgmtPanel: React.FC<Props> = ({
                   </div>
                   <div>
                     <label className="text-xs text-[var(--text-secondary)] mb-1 block">
-                      性格
+                      表层性格
                     </label>
-                    <textarea
-                      className="w-full h-20 px-3 py-2 bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg text-sm resize-y focus:border-purple-500/50 focus:outline-none"
-                      placeholder="性格特征..."
-                      value={d.性格}
-                      onChange={e => updateField('性格', e.target.value)}
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg text-sm focus:border-purple-500/50 focus:outline-none"
+                      placeholder="表面表现的性格特征"
+                      value={d.表层性格}
+                      onChange={e => updateField('表层性格', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-[var(--text-secondary)] mb-1 block">
+                      中层性格
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg text-sm focus:border-purple-500/50 focus:outline-none"
+                      placeholder="内在动机和性格"
+                      value={d.中层性格}
+                      onChange={e => updateField('中层性格', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-[var(--text-secondary)] mb-1 block">
+                      内核性格
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg text-sm focus:border-purple-500/50 focus:outline-none"
+                      placeholder="核心价值观和深层性格"
+                      value={d.内核性格}
+                      onChange={e => updateField('内核性格', e.target.value)}
                     />
                   </div>
                 </div>
@@ -822,6 +1402,18 @@ export const CharacterMgmtPanel: React.FC<Props> = ({
                       placeholder="角色在故事中的作用"
                       value={d.核心意义}
                       onChange={e => updateField('核心意义', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-[var(--text-secondary)] mb-1 block">
+                      结局
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full px-3 py-2 bg-[var(--bg-dark)] border border-[var(--border)] rounded-lg text-sm focus:border-purple-500/50 focus:outline-none"
+                      placeholder="预设结局"
+                      value={d.结局}
+                      onChange={e => updateField('结局', e.target.value)}
                     />
                   </div>
                   <div>

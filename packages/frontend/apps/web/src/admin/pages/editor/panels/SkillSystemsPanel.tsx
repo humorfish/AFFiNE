@@ -1,46 +1,246 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+} from 'react';
 import { createPortal } from 'react-dom';
-import { z } from 'zod';
-import {
-  generateLLM,
-  generateValidated,
-  parseAIJSON,
-  useSystemPrompt,
-} from './panel-shared';
-import { saveVersion } from '../useWorldApi';
+import { generateLLM, parseAIJSON } from './panel-shared';
+import { API_BASE, getAuthHeaders } from '../useWorldApi';
 
-// ── Source-derived prompt & pipe parsers (源码 lines 10700-10817) ──────
+// ── Source-derived: 55 功法类型 (Vue line 10561-10640) ──────
 
-function buildSkillSystemPrompt(): string {
-  return `你是一个专业的小说功法设计师。请根据用户要求生成详细的功法设计。
+/** Vue source: 功法类型字典 line 10561-10640 */
+const 功法大类选项 = [
+  '功法',
+  '武技',
+  '炼体术',
+  '身法',
+  '魔法',
+  '咒术',
+  '符箓',
+  '阵法',
+  '火术',
+  '水术',
+  '雷术',
+  '冰术',
+  '风术',
+  '土术',
+  '神通',
+  '幻术',
+  '神识术',
+  '音攻',
+  '时间术',
+  '空间术',
+  '因果术',
+  '命运术',
+  '变身术',
+  '分身术',
+  '隐身术',
+  '秘术',
+  '血脉技',
+  '天赋',
+  '禁术',
+  '鬼道',
+  '灵术',
+  '阴阳术',
+  '契约术',
+  '召唤术',
+  '傀儡术',
+  '器术',
+  '丹术',
+  '炼器术',
+  '毒术',
+  '机甲术',
+  '基因术',
+  '纳米术',
+  '能量术',
+  '医术',
+  '驯兽术',
+  '厨艺',
+  '农艺',
+  '占卜术',
+  '风水术',
+  '相术',
+  '木术',
+  '兽化',
+  '虫术',
+  '神术',
+  '佛法',
+  '道术',
+];
 
-输出格式要求（管道符分隔，每行一个字段）：
-N|功法名称|功法大类|功法品级
-D|功法描述
-E|效果名称|效果类型|效果描述
-C|消耗类型|消耗数值|冷却时间
-R|使用限制|副作用
+/** Vue source: 功法类型说明字典 line 10561-10640 */
+const 功法类型说明: Record<string, string> = {
+  功法: '功法类特点：通过修炼内功心法提升修为，强调吐纳、打坐、运气，包含完整的修炼层次，注重内力运转路线。',
+  武技: '武技类特点：战斗技巧和招式，强调身法、剑法、拳法等实战能力，讲究招式套路和临敌应变。',
+  炼体术:
+    '炼体术特点：专注锻炼肉身的修炼方法，通过淬体、炼骨、洗髓等提升身体强度，追求肉身成圣。',
+  身法: '身法类特点：移动闪避的轻功技艺，强调速度、灵活性、隐匿性。',
+  魔法: '魔法类特点：运用魔力施展法术，强调咒语、法阵、元素掌控，需要消耗魔力。',
+  咒术: '咒术类特点：通过念诵特定咒语触发的能力，可诅咒敌人或祝福己方。',
+  符箓: '符箓类特点：通过绘制符咒承载法力，可提前制作存储，使用时激活释放。',
+  阵法: '阵法类特点：布置法阵产生特定效果，需要阵眼、阵基、阵旗等辅助。',
+  火术: '火术类特点：操控火焰元素的功法，可释放火球、火墙、火海等攻击。',
+  水术: '水术类特点：操控水元素的功法，可释放水箭、水盾、冰冻等攻防能力。',
+  雷术: '雷术类特点：操控雷电元素的功法，以速度和爆发力著称。',
+  冰术: '冰术类特点：操控冰霜元素的功法，兼具攻击和控制效果。',
+  风术: '风术类特点：操控风元素的功法，强调速度和范围攻击。',
+  土术: '土术类特点：操控土石元素的功法，以防御和控制见长。',
+  神通: '神通类特点：神灵级别的强大能力，通常只有极高境界才能掌握。',
+  幻术: '幻术类特点：制造幻象迷惑敌人的能力，作用于精神层面。',
+  神识术: '神识术类特点：运用精神力/神识的功法，可探查、攻击、防御。',
+  音攻: '音攻类特点：以声波为武器的功法，可通过乐器或声带释放攻击。',
+  时间术: '时间术类特点：涉及时间操控的禁忌功法，可加速、减速、回溯。',
+  空间术: '空间术类特点：涉及空间操控的功法，可瞬移、切割空间。',
+  因果术: '因果术类特点：涉及因果律的功法，可改变因果链条。',
+  命运术: '命运术类特点：涉及命运操控的功法，可预测或改变命运。',
+  变身术: '变身术类特点：可改变自身形态的功法，化身各种形态。',
+  分身术: '分身术类特点：制造分身的功法，分身可独立战斗。',
+  隐身术: '隐身术类特点：可隐藏自身气息和外形的功法。',
+  秘术: '秘术类特点：神秘的特殊技艺，通常有独特传承和修炼方式。',
+  血脉技: '血脉技类特点：通过血脉觉醒获得的天赋能力，与种族血统相关。',
+  天赋: '天赋类特点：与生俱来的特殊能力，无需学习即可使用。',
+  禁术: '禁术类特点：被禁止使用的危险能力，威力极大但代价惨重。',
+  鬼道: '鬼道类特点：涉及鬼魂、亡灵的功法，可召唤或操控鬼物。',
+  灵术: '灵术类特点：涉及灵体、灵魂的功法，可沟通或操控灵体。',
+  阴阳术: '阴阳术类特点：操控阴阳之力的功法，平衡生死、光暗。',
+  契约术: '契约术类特点：通过签订契约获得能力的功法。',
+  召唤术: '召唤术类特点：召唤其他存在的能力，可召唤灵兽、元素生物等。',
+  傀儡术: '傀儡术类特点：操控傀儡或人偶的功法，可远程操控战斗。',
+  器术: '器术类特点：运用法器/灵器释放能力的功法。',
+  丹术: '丹术类特点：炼丹制药的技艺，可炼制各种丹药。',
+  炼器术: '炼器术类特点：炼制法器的技艺，可打造各种法器、灵宝。',
+  毒术: '毒术类特点：用毒施毒的技艺，可制作各种毒药、毒雾。',
+  机甲术: '机甲术类特点：操控机甲/机械的功法，科技侧能力。',
+  基因术: '基因术类特点：涉及基因改造的功法，可强化自身基因。',
+  纳米术: '纳米术类特点：操控纳米技术的功法，科技侧能力。',
+  能量术: '能量术类特点：操控各种能量的功法，可吸收、转化、释放。',
+  医术: '医术类特点：治病救人的医疗技艺，包括诊断、用药、针灸。',
+  驯兽术: '驯兽术类特点：驯服和控制灵兽/魔兽的功法。',
+  厨艺: '厨艺类特点：通过烹饪获得特殊效果的功法，美食修仙。',
+  农艺: '农艺类特点：种植灵草、灵药的功法，农业修仙。',
+  占卜术: '占卜术类特点：预测未来或探查信息的功法。',
+  风水术: '风水术类特点：堪舆地理、调整风水的功法。',
+  相术: '相术类特点：通过面相、骨相判断命运的功法。',
+  木术: '木术类特点：操控植物/木元素的功法，可催生藤蔓、树墙。',
+  兽化: '兽化类特点：可获得野兽特征和能力的功法，部分或完全兽化。',
+  虫术: '虫术类特点：操控昆虫/蛊虫的功法，可培养各种蛊虫。',
+  神术: '神术类特点：神圣系功法，信仰之力驱动的神术。',
+  佛法: '佛法类特点：佛门功法，以禅定、功德为修炼根基。',
+  道术: '道术类特点：道门功法，以道法自然、符箓丹道为根基。',
+};
 
-格式说明：
-- N 行：功法名称、大类（功法/武技/炼体术/身法/魔法/咒术/符箓/阵法/特殊能力）、品级（入门/初级/中级/高级/精英/传说/神话/禁忌）
-- D 行：功法的详细描述
-- E 行：可多行，每个效果一行，效果类型为（攻击/防御/治疗/控制/增益/减益/移动/感知/召唤/变化/特殊）
-- C 行：消耗类型、消耗数值、冷却时间
-- R 行：使用限制和副作用
+/** Vue source: je(Ee, Pe, We, tt, nt, $t) line 10545-10745 */
+function buildSkillSystemsPrompt(
+  世界观: {
+    世界名称?: string;
+    世界类型?: string;
+    势力格局?: string;
+    社会结构?: string;
+    核心规则?: string;
+  } | null,
+  力量体系列表:
+    | {
+        体系名称?: string;
+        体系类型?: string;
+        体系描述?: string;
+      }[]
+    | null,
+  已有物品:
+    | {
+        物品名称?: string;
+        类别?: string;
+        作用?: string;
+      }[]
+    | null,
+  已有功法:
+    | {
+        功法名称?: string;
+        功法大类?: string;
+        功法品级?: string;
+        功法简介?: string;
+      }[]
+    | null,
+  指定类型: string = '',
+  已有功法名: string[] = [],
+  生成数量: number = 1
+): string {
+  let s = `你是一位专业的小说功法设计师，擅长构建完整的功法、魔法、武技等能力系统。\n请根据用户的需求和提供的世界观信息，生成详细的功法设定。\n\n`;
 
-示例：
-N|天罡三十六剑|武技|高级
-D|以天罡星为引，凝聚三十六道剑气，可攻可守，变化无穷
-E|星罗剑雨|攻击|三十六道剑气齐发，覆盖范围极广
-E|北斗护身|防御|剑气形成护盾，抵御同阶攻击
-C|灵力|中等|12时辰
-R|需天罡体质方可修炼|连续使用超过三招会经脉受损
+  // 【重要】生成数量 — Vue line 10642-10644
+  if (生成数量 > 1) {
+    s += `【重要】请生成 ${生成数量} 个不同的功法，每个功法都要有独特的名称、设定和特点，避免雷同。\n\n`;
+  }
 
-要求：
-1. 功法名称要有创意，符合修仙世界观
-2. 效果要有想象力，包含多种效果类型
-3. 消耗和限制要平衡，不能过于逆天
-4. 描述要生动，有画面感`;
+  // 【指定功法类型】 — Vue line 10561-10640
+  if (指定类型) {
+    s += `【指定功法类型】\n你必须生成一个「${指定类型}」类型的功法，所有设定都要符合该类型的特征。\n\n`;
+    const desc = 功法类型说明[指定类型];
+    if (desc) s += `${desc}\n\n`;
+  }
+
+  // 【世界观背景】 5 fields — Vue line 10547-10553
+  if (世界观 && Object.keys(世界观).some(k => (世界观 as any)[k])) {
+    s += `【世界观背景】\n世界名称：${世界观.世界名称 || '未设定'}\n世界类型：${世界观.世界类型 || '未设定'}\n势力格局：${世界观.势力格局 || '未设定'}\n社会结构：${世界观.社会结构 || '未设定'}\n核心规则：${世界观.核心规则 || '未设定'}\n\n`;
+  }
+
+  // 【已有力量体系】 max 5 — Vue line 10554-10558
+  if (力量体系列表 && 力量体系列表.length > 0) {
+    s += `【已有力量体系】\n`;
+    力量体系列表.slice(0, 5).forEach(p => {
+      s += `- ${p.体系名称}（${p.体系类型}）：${p.体系描述?.substring(0, 50) || '无描述'}\n`;
+    });
+    s += '\n';
+  }
+
+  // 【已有物品】 max 10 — Vue line 10559-10560
+  if (已有物品 && 已有物品.length > 0) {
+    s += `【已有物品】\n`;
+    已有物品.slice(0, 10).forEach(it => {
+      s += `- ${it.物品名称}${it.类别 ? `（${it.类别}）` : ''}${it.作用 ? `：${it.作用.substring(0, 30)}` : ''}\n`;
+    });
+    s += '\n';
+  }
+
+  // 【已有功法】 — Vue line 10641
+  if (已有功法 && 已有功法.length > 0) {
+    s += `【已有功法】（请避免重复，可以参考风格）\n`;
+    已有功法.forEach(sk => {
+      s += `- ${sk.功法名称}（${sk.功法大类}/${sk.功法品级}）：${sk.功法简介?.substring(0, 30) || '无描述'}\n`;
+    });
+    s += '\n';
+  }
+
+  // 【绝对禁止重复】 box — Vue line 10645-10650
+  if (已有功法名.length > 0) {
+    s += `\n╔══════════════════════════════════════════════════════════════╗\n║  【绝对禁止重复】以下功法名称已被使用，生成任何重复名称将导致任务失败\n╚════════════════════════════════════════════════════════════════╝\n已存在的功法(${已有功法名.length}个)：${已有功法名.slice(0, 20).join('、')}\n`;
+  }
+
+  // Output format — Vue line 10700-10730
+  s += `\n【输出格式】（极简格式，节省token）\n`;
+  s += `N|功法名称|功法大类|功法品级\n`;
+  s += `D|功法描述\n`;
+  s += `E|效果名称|效果类型|效果描述\n`;
+  s += `C|消耗类型|消耗数值|冷却时间\n`;
+  s += `R|使用限制|副作用\n\n`;
+  s += `【格式说明】\n`;
+  s += `- N: 基本信息（必填，每个功法第1行）\n`;
+  s += `  - 功法大类：${功法大类选项.slice(0, 10).join('/')}等\n`;
+  s += `  - 功法品级：入门/初级/中级/高级/精英/传说/神话\n`;
+  s += `- D: 功法描述（必填，10-50字）\n`;
+  s += `- E: 效果（可多行，建议2-4个）— 效果类型：攻击/防御/治疗/控制/增益/减益/移动/感知/召唤/变化/特殊\n`;
+  s += `- C: 消耗信息（可选）\n`;
+  s += `- R: 限制信息（可选）\n\n`;
+  s += `【重要规则】\n`;
+  s += `1. 严格按格式输出，每个功法按N→D→E→C→R顺序\n`;
+  s += `2. 每个功法的N行必须在该功法的第一行\n`;
+  s += `3. 不要输出任何其他内容\n`;
+  s += `4. 不要输出JSON，只输出上述管道格式\n`;
+  s += `5. ⚠️ 在输出前检查功法名称是否与已有名称重复\n`;
+
+  return s;
 }
 
 interface PipeSkillEffect {
@@ -112,7 +312,7 @@ function parseSkillResponse(text: string): 功法数据[] {
       id: Date.now() + i,
       功法名称: s.功法名称 || '未命名',
       功法大类: s.功法大类 || '功法',
-      效果分类: '攻击',
+      效果分类: '特殊',
       功法品级: s.功法品级 || '入门',
       稀有度: '普通',
       功法描述: s.功法描述 || '',
@@ -120,8 +320,25 @@ function parseSkillResponse(text: string): 功法数据[] {
       功法来源: '传承',
       创造者: '',
       流派归属: '',
-      效果列表: s.效果列表.map(e => ({ ...e, 消耗类型: '', 消耗数值: '' })),
-      修炼信息: { 修炼难度: '', 境界要求: '', 修炼方法: '', 所需资源: '' },
+      效果列表: s.效果列表.map(e => ({
+        ...e,
+        效果数值: '',
+        持续时间: '',
+        作用目标: '',
+      })),
+      消耗信息: {
+        消耗类型: s.消耗类型 || '',
+        消耗数值: s.消耗数值 || '',
+        冷却时间: s.冷却时间 || '',
+      },
+      修炼信息: {
+        修炼难度: '',
+        境界要求: '',
+        修炼方法: '',
+        所需资源: '',
+        关键心得: '',
+      },
+      进阶列表: [],
       限制信息: {
         使用限制: s.使用限制,
         副作用: s.副作用,
@@ -138,7 +355,7 @@ function parseSkillResponse(text: string): 功法数据[] {
     id: Date.now() + i,
     功法名称: s.功法名称 || '未命名',
     功法大类: s.功法大类 || '功法',
-    效果分类: s.效果分类 || '攻击',
+    效果分类: s.效果分类 || '特殊',
     功法品级: s.功法品级 || '入门',
     稀有度: s.稀有度 || '普通',
     功法描述: s.功法描述 || '',
@@ -147,12 +364,19 @@ function parseSkillResponse(text: string): 功法数据[] {
     创造者: s.创造者 || '',
     流派归属: s.流派归属 || '',
     效果列表: s.效果列表 || [],
+    消耗信息: s.消耗信息 || {
+      消耗类型: '',
+      消耗数值: '',
+      冷却时间: '',
+    },
     修炼信息: s.修炼信息 || {
       修炼难度: '',
       境界要求: '',
       修炼方法: '',
       所需资源: '',
+      关键心得: '',
     },
+    进阶列表: s.进阶列表 || [],
     限制信息: s.限制信息 || {
       使用限制: '',
       副作用: '',
@@ -185,15 +409,27 @@ interface 功法数据 {
     效果名称: string;
     效果类型: string;
     效果描述: string;
+    效果数值: string;
+    持续时间: string;
+    作用目标: string;
+  }[];
+  消耗信息: {
     消耗类型: string;
     消耗数值: string;
-  }[];
+    冷却时间: string;
+  };
   修炼信息: {
     修炼难度: string;
     境界要求: string;
     修炼方法: string;
     所需资源: string;
+    关键心得: string;
   };
+  进阶列表: {
+    阶段名称: string;
+    阶段描述: string;
+    所需条件: string;
+  }[];
   限制信息: {
     使用限制: string;
     副作用: string;
@@ -202,18 +438,6 @@ interface 功法数据 {
   };
 }
 
-/* Source-derived: options */
-const 功法大类选项 = [
-  '功法',
-  '武技',
-  '炼体术',
-  '身法',
-  '魔法',
-  '咒术',
-  '符箓',
-  '阵法',
-  '特殊能力',
-];
 const 效果分类选项 = [
   '攻击',
   '防御',
@@ -250,8 +474,6 @@ const 来源选项 = [
   '其他',
 ];
 
-const SkillSystemsSchema = z.array(z.any()).min(1);
-
 export const SkillSystemsPanel: React.FC<Props> = ({
   projectId,
   onClose,
@@ -265,6 +487,20 @@ export const SkillSystemsPanel: React.FC<Props> = ({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Load skill systems data
+  useEffect(() => {
+    if (!projectId) return;
+    fetch(`${API_BASE}/api/skill-systems/project/${projectId}/list`, {
+      headers: getAuthHeaders(),
+    })
+      .then(res => res.json())
+      .then(result => {
+        if (result.success && Array.isArray(result.data))
+          set功法列表(result.data);
+      })
+      .catch(() => {});
+  }, [projectId]);
+
   /* AI Generation state (源码 line 164593) */
   const [showAIDialog, setShowAIDialog] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -273,10 +509,6 @@ export const SkillSystemsPanel: React.FC<Props> = ({
   const [genResult, setGenResult] = useState<功法数据[] | null>(null);
   const [genError, setGenError] = useState('');
   const abortRef = useRef<AbortController | null>(null);
-  const fetchSystemPrompt = useSystemPrompt(
-    'AI生成功法',
-    buildSkillSystemPrompt()
-  );
 
   const 当前功法 = 功法列表.find(s => s.id === 当前ID) || null;
 
@@ -285,10 +517,37 @@ export const SkillSystemsPanel: React.FC<Props> = ({
     setSaving(true);
     setSaved(false);
     try {
-      await saveVersion('skills', projectId, {
-        描述: '保存功法',
-        内容: 功法列表,
-      });
+      await Promise.allSettled(
+        功法列表.map(s => {
+          if (!s.id || s.id > 1000000000000) {
+            return fetch(
+              `${API_BASE}/api/skill-systems/project/${projectId}/skill`,
+              {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify(s),
+              }
+            );
+          }
+          return fetch(
+            `${API_BASE}/api/skill-systems/project/${projectId}/skill/${s.id}`,
+            {
+              method: 'PUT',
+              headers: getAuthHeaders(),
+              body: JSON.stringify(s),
+            }
+          );
+        })
+      );
+      const res = await fetch(
+        `${API_BASE}/api/skill-systems/project/${projectId}/list`,
+        {
+          headers: getAuthHeaders(),
+        }
+      );
+      const result = await res.json();
+      if (result.success && Array.isArray(result.data))
+        set功法列表(result.data);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
@@ -306,7 +565,7 @@ export const SkillSystemsPanel: React.FC<Props> = ({
         id,
         功法名称: '新功法',
         功法大类: '功法',
-        效果分类: '攻击',
+        效果分类: '特殊',
         功法品级: '入门',
         稀有度: '普通',
         功法描述: '',
@@ -315,7 +574,15 @@ export const SkillSystemsPanel: React.FC<Props> = ({
         创造者: '',
         流派归属: '',
         效果列表: [],
-        修炼信息: { 修炼难度: '', 境界要求: '', 修炼方法: '', 所需资源: '' },
+        消耗信息: { 消耗类型: '', 消耗数值: '', 冷却时间: '' },
+        修炼信息: {
+          修炼难度: '',
+          境界要求: '',
+          修炼方法: '',
+          所需资源: '',
+          关键心得: '',
+        },
+        进阶列表: [],
         限制信息: { 使用限制: '', 副作用: '', 反噬风险: '', 禁忌事项: '' },
       },
     ]);
@@ -329,11 +596,21 @@ export const SkillSystemsPanel: React.FC<Props> = ({
   }, []);
 
   const deleteSkill = useCallback(
-    (id: number) => {
+    async (id: number) => {
+      if (!projectId) return;
+      const isLocal = id > 1000000000000;
+      if (!isLocal) {
+        try {
+          await fetch(
+            `${API_BASE}/api/skill-systems/project/${projectId}/skill/${id}`,
+            { method: 'DELETE', headers: getAuthHeaders() }
+          );
+        } catch {}
+      }
       set功法列表(prev => prev.filter(s => s.id !== id));
       if (当前ID === id) set当前ID(null);
     },
-    [当前ID]
+    [projectId, 当前ID]
   );
 
   const openAIDialog = useCallback(() => {
@@ -352,53 +629,91 @@ export const SkillSystemsPanel: React.FC<Props> = ({
     const ac = new AbortController();
     abortRef.current = ac;
     try {
-      const systemPrompt = await fetchSystemPrompt();
+      // ── getContext — Vue: GET /skill-systems/project/{id}/context
+      let 世界观: any = null;
+      let 力量体系列表: any[] = [];
+      let 已有物品: any[] = [];
+      let 已有功法ctx: any[] = [];
+      try {
+        const ctxRes = await fetch(
+          `${API_BASE}/api/skill-systems/project/${projectId}/context`,
+          { headers: getAuthHeaders() }
+        );
+        const ctxData = await ctxRes.json();
+        if (ctxData.success && ctxData.data) {
+          世界观 = ctxData.data.世界观信息 || null;
+          力量体系列表 = ctxData.data.力量体系列表 || [];
+          已有物品 = ctxData.data.物品列表 || [];
+          已有功法ctx = ctxData.data.已有功法 || ctxData.data.功法列表 || [];
+        }
+      } catch {}
+
+      const 已有功法名 = 功法列表.map(s => s.功法名称).filter(n => !!n?.trim());
+      const systemPrompt = buildSkillSystemsPrompt(
+        世界观,
+        力量体系列表,
+        已有物品,
+        已有功法ctx,
+        '',
+        已有功法名
+      );
       const messages = [
         { role: 'system' as const, content: systemPrompt },
         {
           role: 'user' as const,
-          content: aiPrompt || '请根据世界观信息，生成完整的功法设定',
+          content: aiPrompt || '请生成1个功法。按管道格式输出。',
         },
       ];
-      const validated = await generateValidated({
-        schema: SkillSystemsSchema,
-        generate: attempt =>
-          generateLLM({
-            messages,
-            temperature: Math.min(1.0, 0.85 + attempt * 0.05),
-            max_tokens: 4096,
-            onChunk: setStreamText,
-            signal: ac.signal,
-          }),
-        parseResponse: parseSkillResponse,
-        maxRetries: 3,
+
+      const fullText = await generateLLM({
+        messages,
+        temperature: 0.85,
+        max_tokens: 4096,
+        onChunk: setStreamText,
+        signal: ac.signal,
       });
-      if (!validated) {
+
+      const parsed = parseSkillResponse(fullText);
+      if (!parsed || parsed.length === 0) {
         setGenError('AI返回格式解析失败');
         return;
       }
-      const items = (Array.isArray(validated.data)
-        ? validated.data
-        : [validated.data]) as unknown as 功法数据[];
-      setGenResult(items);
+      setGenResult(parsed);
     } catch (e: any) {
       if (e.name !== 'AbortError') setGenError(e.message || '生成失败');
     } finally {
       setGenerating(false);
     }
-  }, [aiPrompt, fetchSystemPrompt]);
+  }, [aiPrompt, 功法列表, projectId]);
 
-  const adoptResult = useCallback(() => {
-    if (!genResult) return;
-    set功法列表(prev => [...prev, ...genResult]);
+  const adoptResult = useCallback(async () => {
+    if (!genResult || !projectId) return;
     setShowAIDialog(false);
     setGenResult(null);
-    if (projectId)
-      saveVersion('skills', projectId, {
-        描述: 'AI生成功法',
-        内容: [...功法列表, ...genResult],
-      }).catch(() => {});
-  }, [genResult, 功法列表, projectId]);
+    // POST each skill to server — Vue: POST /skill-systems/project/{id}/skill
+    for (const item of genResult) {
+      try {
+        await fetch(
+          `${API_BASE}/api/skill-systems/project/${projectId}/skill`,
+          {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(item),
+          }
+        );
+      } catch {}
+    }
+    // Refresh list from server
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/skill-systems/project/${projectId}/list`,
+        { headers: getAuthHeaders() }
+      );
+      const result = await res.json();
+      if (result.success && Array.isArray(result.data))
+        set功法列表(result.data);
+    } catch {}
+  }, [genResult, projectId]);
 
   const cancelGeneration = useCallback(() => {
     abortRef.current?.abort();
@@ -712,10 +1027,11 @@ export const SkillSystemsPanel: React.FC<Props> = ({
                               ...当前功法.效果列表,
                               {
                                 效果名称: '',
-                                效果类型: '攻击',
+                                效果类型: '特殊',
                                 效果描述: '',
-                                消耗类型: '',
-                                消耗数值: '',
+                                效果数值: '',
+                                持续时间: '',
+                                作用目标: '',
                               },
                             ],
                           })
@@ -725,44 +1041,232 @@ export const SkillSystemsPanel: React.FC<Props> = ({
                       </button>
                     </div>
                     {当前功法.效果列表.map((ef, i) => (
-                      <div key={i} className="flex items-center gap-2 mb-2">
+                      <div
+                        key={i}
+                        className="p-2 bg-[var(--bg-dark)] rounded-lg space-y-2 mb-2 relative group"
+                      >
+                        <button
+                          className="absolute p-1 text-red-400 transition-all rounded opacity-0 top-1 right-1 group-hover:opacity-100 hover:bg-red-500/20"
+                          onClick={() =>
+                            updateSkill(当前功法.id, {
+                              效果列表: 当前功法.效果列表.filter(
+                                (_, idx) => idx !== i
+                              ),
+                            })
+                          }
+                        >
+                          <i className="ri-close-line text-xs" />
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            className="flex-1 h-8 px-2 text-xs bg-[var(--bg-card)] border border-[var(--border)] rounded"
+                            placeholder="效果名称"
+                            value={ef.效果名称}
+                            onChange={e => {
+                              const list = 当前功法.效果列表.map((item, idx) =>
+                                idx === i
+                                  ? { ...item, 效果名称: e.target.value }
+                                  : item
+                              );
+                              updateSkill(当前功法.id, { 效果列表: list });
+                            }}
+                          />
+                          <select
+                            className="w-16 h-8 px-1 text-xs bg-[var(--bg-card)] border border-[var(--border)] rounded"
+                            value={ef.效果类型}
+                            onChange={e => {
+                              const list = 当前功法.效果列表.map((item, idx) =>
+                                idx === i
+                                  ? { ...item, 效果类型: e.target.value }
+                                  : item
+                              );
+                              updateSkill(当前功法.id, { 效果列表: list });
+                            }}
+                          >
+                            {效果分类选项.map(t => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                         <input
                           type="text"
-                          className="flex-1 h-8 px-2 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
-                          placeholder="效果名称"
-                          value={ef.效果名称}
+                          className="w-full h-8 px-2 text-xs bg-[var(--bg-card)] border border-[var(--border)] rounded"
+                          placeholder="效果描述"
+                          value={ef.效果描述}
                           onChange={e => {
                             const list = 当前功法.效果列表.map((item, idx) =>
                               idx === i
-                                ? { ...item, 效果名称: e.target.value }
+                                ? { ...item, 效果描述: e.target.value }
                                 : item
                             );
                             updateSkill(当前功法.id, { 效果列表: list });
                           }}
                         />
-                        <select
-                          className="w-16 h-8 px-1 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
-                          value={ef.效果类型}
+                        <div className="grid grid-cols-3 gap-2">
+                          <input
+                            type="text"
+                            className="h-7 px-2 text-xs bg-[var(--bg-card)] border border-[var(--border)] rounded"
+                            placeholder="效果数值"
+                            value={ef.效果数值}
+                            onChange={e => {
+                              const list = 当前功法.效果列表.map((item, idx) =>
+                                idx === i
+                                  ? { ...item, 效果数值: e.target.value }
+                                  : item
+                              );
+                              updateSkill(当前功法.id, { 效果列表: list });
+                            }}
+                          />
+                          <input
+                            type="text"
+                            className="h-7 px-2 text-xs bg-[var(--bg-card)] border border-[var(--border)] rounded"
+                            placeholder="持续时间"
+                            value={ef.持续时间}
+                            onChange={e => {
+                              const list = 当前功法.效果列表.map((item, idx) =>
+                                idx === i
+                                  ? { ...item, 持续时间: e.target.value }
+                                  : item
+                              );
+                              updateSkill(当前功法.id, { 效果列表: list });
+                            }}
+                          />
+                          <input
+                            type="text"
+                            className="h-7 px-2 text-xs bg-[var(--bg-card)] border border-[var(--border)] rounded"
+                            placeholder="作用目标"
+                            value={ef.作用目标}
+                            onChange={e => {
+                              const list = 当前功法.效果列表.map((item, idx) =>
+                                idx === i
+                                  ? { ...item, 作用目标: e.target.value }
+                                  : item
+                              );
+                              updateSkill(当前功法.id, { 效果列表: list });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* 消耗信息 */}
+                  <div className="bg-[var(--bg-card)] rounded-xl p-4">
+                    <h4 className="text-xs font-semibold mb-2">消耗信息</h4>
+                    <div className="grid grid-cols-3 gap-2">
+                      <input
+                        type="text"
+                        className="h-8 px-2 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
+                        placeholder="消耗类型"
+                        value={当前功法.消耗信息.消耗类型}
+                        onChange={e =>
+                          updateSkill(当前功法.id, {
+                            消耗信息: {
+                              ...当前功法.消耗信息,
+                              消耗类型: e.target.value,
+                            },
+                          })
+                        }
+                      />
+                      <input
+                        type="text"
+                        className="h-8 px-2 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
+                        placeholder="消耗数值"
+                        value={当前功法.消耗信息.消耗数值}
+                        onChange={e =>
+                          updateSkill(当前功法.id, {
+                            消耗信息: {
+                              ...当前功法.消耗信息,
+                              消耗数值: e.target.value,
+                            },
+                          })
+                        }
+                      />
+                      <input
+                        type="text"
+                        className="h-8 px-2 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
+                        placeholder="冷却时间"
+                        value={当前功法.消耗信息.冷却时间}
+                        onChange={e =>
+                          updateSkill(当前功法.id, {
+                            消耗信息: {
+                              ...当前功法.消耗信息,
+                              冷却时间: e.target.value,
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                  {/* 进阶列表 */}
+                  <div className="bg-[var(--bg-card)] rounded-xl p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-xs font-semibold">进阶列表</h4>
+                      <button
+                        className="text-xs text-purple-400"
+                        onClick={() =>
+                          updateSkill(当前功法.id, {
+                            进阶列表: [
+                              ...当前功法.进阶列表,
+                              { 阶段名称: '', 阶段描述: '', 所需条件: '' },
+                            ],
+                          })
+                        }
+                      >
+                        <i className="ri-add-line" /> 添加
+                      </button>
+                    </div>
+                    {当前功法.进阶列表.map((lv, i) => (
+                      <div key={i} className="flex items-center gap-2 mb-2">
+                        <input
+                          type="text"
+                          className="flex-1 h-8 px-2 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
+                          placeholder="阶段名称"
+                          value={lv.阶段名称}
                           onChange={e => {
-                            const list = 当前功法.效果列表.map((item, idx) =>
+                            const list = 当前功法.进阶列表.map((item, idx) =>
                               idx === i
-                                ? { ...item, 效果类型: e.target.value }
+                                ? { ...item, 阶段名称: e.target.value }
                                 : item
                             );
-                            updateSkill(当前功法.id, { 效果列表: list });
+                            updateSkill(当前功法.id, { 进阶列表: list });
                           }}
-                        >
-                          {效果分类选项.map(t => (
-                            <option key={t} value={t}>
-                              {t}
-                            </option>
-                          ))}
-                        </select>
+                        />
+                        <input
+                          type="text"
+                          className="flex-1 h-8 px-2 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
+                          placeholder="阶段描述"
+                          value={lv.阶段描述}
+                          onChange={e => {
+                            const list = 当前功法.进阶列表.map((item, idx) =>
+                              idx === i
+                                ? { ...item, 阶段描述: e.target.value }
+                                : item
+                            );
+                            updateSkill(当前功法.id, { 进阶列表: list });
+                          }}
+                        />
+                        <input
+                          type="text"
+                          className="flex-1 h-8 px-2 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
+                          placeholder="所需条件"
+                          value={lv.所需条件}
+                          onChange={e => {
+                            const list = 当前功法.进阶列表.map((item, idx) =>
+                              idx === i
+                                ? { ...item, 所需条件: e.target.value }
+                                : item
+                            );
+                            updateSkill(当前功法.id, { 进阶列表: list });
+                          }}
+                        />
                         <button
                           className="p-1 hover:bg-red-500/20 rounded text-[var(--text-secondary)] hover:text-red-400"
                           onClick={() =>
                             updateSkill(当前功法.id, {
-                              效果列表: 当前功法.效果列表.filter(
+                              进阶列表: 当前功法.进阶列表.filter(
                                 (_, idx) => idx !== i
                               ),
                             })
@@ -829,6 +1333,20 @@ export const SkillSystemsPanel: React.FC<Props> = ({
                             修炼信息: {
                               ...当前功法.修炼信息,
                               所需资源: e.target.value,
+                            },
+                          })
+                        }
+                      />
+                      <input
+                        type="text"
+                        className="h-8 px-2 text-xs bg-[var(--bg-dark)] border border-[var(--border)] rounded"
+                        placeholder="关键心得"
+                        value={当前功法.修炼信息.关键心得}
+                        onChange={e =>
+                          updateSkill(当前功法.id, {
+                            修炼信息: {
+                              ...当前功法.修炼信息,
+                              关键心得: e.target.value,
                             },
                           })
                         }
